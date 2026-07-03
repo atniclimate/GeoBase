@@ -9,6 +9,9 @@ dist/
 .vite/
 *.tsbuildinfo
 .pnpm-store/
+# Render-gate harness output (screenshots + diff summary) — never committed;
+# the one endorsed gate artifact is copied to docs/verification/ by hand.
+verify-out/
 
 # ── GeoBase data — NEVER commit geospatial data or secure vaults ────────
 # Lesson from the prototype: 46 GB of data was co-located with code.

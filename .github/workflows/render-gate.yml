@@ -1,0 +1,47 @@
+# Phase 0.2 render gate — terrain-displacement proof in CI.
+#
+# Deliberately a SEPARATE workflow from ci.yml: headless-WebGL rendering on
+# shared runners (SwiftShader, via Playwright's default --enable-unsafe-
+# swiftshader) can flake, and a flaky job inside the main CI workflow would
+# redden pushes for environment noise — the exact Phase 0.1 failure mode.
+# This job is INFORMATIONAL until it records 5 consecutive green runs on
+# main; then fold it into ci.yml as blocking. The authoritative gate remains
+# the local harness run (engine-light `verify:render`) plus the committed,
+# human-endorsed screenshot in docs/verification/.
+name: Render Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: render-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-gate:
+    name: Terrain displacement proof (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium (workspace-pinned Playwright)
+        run: pnpm --filter @geobase/engine-light exec playwright install --with-deps chromium
+      - name: Build Light Engine
+        run: pnpm --filter @geobase/engine-light build
+      - name: Run render gate
+        run: pnpm --filter @geobase/engine-light run verify:render
+      - name: Upload captures (evidence survives failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-gate-output
+          path: engine-light/verify-out/

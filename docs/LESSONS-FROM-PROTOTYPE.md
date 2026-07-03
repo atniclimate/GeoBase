@@ -18,6 +18,18 @@ No checkpoint ever confirmed the *rendered output*.
 Cesium would not render local Terrarium tiles as true 3D; terrain was entangled
 with a Cesium Ion dependency. Data was fine; the *renderer* was the problem.
 
+**Root cause, refined (Phase 0.2):** the failure was a renderer–format
+mismatch, not "local 3D is impossible." Cesium's terrain provider consumes
+quantized-mesh — RSTEP's Gorge viewer proves local Cesium terrain works when
+fed that format (`ctb-tile -f Mesh`). Terrarium raster PNGs, which the
+prototype produced, are *MapLibre's* native `raster-dem` food; the prototype
+made MapLibre food and fed it to Cesium. GeoBase chose MapLibre because
+Terrarium tiles are its first-class terrain source and the static-deploy path
+is simpler — proven by the Phase 0.2 gate. If MapLibre ever becomes untenable,
+the documented fallback is the quantized-mesh pipeline (note: its baking
+toolchain — GDAL + ctb-tile — is not provisioned on the dev machine, and a
+Cesium pivot would reverse rules 2–3; cost it accordingly).
+
 > **Rule:** MapLibre GL with a **local `raster-dem` source**. No Cesium Ion, no
 > cloud-terrain dependency, in either engine. Sovereignty-safe by default.
 

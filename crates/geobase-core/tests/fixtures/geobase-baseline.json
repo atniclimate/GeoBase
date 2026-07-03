@@ -1,0 +1,29 @@
+{
+  "tilejson": "3.0.0",
+  "name": "GeoBase T0 terrain baseline",
+  "attribution": "USGS 3DEP 1/3 Arc-Second, NOAA CRM Vol8 PNW",
+  "classification": "T0 (provisional, pending governance)",
+  "tier": "T0",
+  "tsdf_version": "0.9.4",
+  "encoding": "terrarium",
+  "scheme": "xyz",
+  "crs_chain": [
+    "EPSG:4326",
+    "EPSG:3857"
+  ],
+  "elevation_range_m": [
+    -27.3,
+    374.9
+  ],
+  "minzoom": 8,
+  "maxzoom": 12,
+  "bounds": [
+    -123.15,
+    47.1,
+    -122.85,
+    47.25
+  ],
+  "tiles": [
+    "{z}/{x}/{y}.png"
+  ]
+}

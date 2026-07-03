@@ -11,6 +11,9 @@
 use geobase_tsdf::Tier;
 use serde::{Deserialize, Serialize};
 
+pub mod baseline;
+pub mod crs;
+
 /// GeoBase platform version marker for the spine.
 pub const SPINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 

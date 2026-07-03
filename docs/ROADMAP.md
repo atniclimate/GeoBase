@@ -25,18 +25,25 @@ rendered (see [`LESSONS-FROM-PROTOTYPE.md`](LESSONS-FROM-PROTOTYPE.md)).
 
 ## Phase detail
 
-### 0.1 — Spine / Scaffold  *(current)*
+### 0.1 — Spine / Scaffold  *(complete — tagged `v0.1.0`)*
 Stand up the monorepo (Cargo + pnpm workspaces), vendor TSDF v0.9.4 with the
 pluggable `TsdfSource` resolver, define the shared data-model vocabulary in
 `geobase-core`, write the docs, wire CI + a Pages placeholder, and publish the
 public repo. **Deliverable of this phase = everything needed to build the rest.**
 
-### 0.2 — Baseline render proof
+### 0.2 — Baseline render proof  *(complete — gate met)*
 Prove the render pipeline the prototype could not. The Light Engine loads a small
 terrain/elevation/surface-type GeoPackage as the T0 baseline and enables MapLibre
 3D terrain from a **local `raster-dem` source** (no Cesium Ion, no cloud). The gate
 is a rendered screenshot at pitch — the single most important lesson encoded as a
 CI-checkable artifact.
+
+**Gate artifact:** [`docs/verification/phase-0.2-terrain-45deg.png`](verification/phase-0.2-terrain-45deg.png)
+— headless capture at 45° pitch, displaced terrain from bundled local Terrarium
+tiles (T0, provisional). Ongoing enforcement is the terrain-on/off pixel-diff
+assertion in `engine-light/scripts/verify-render.mjs` (run locally pre-push and
+by the `Render Gate` workflow); the committed PNG is the one-time human-endorsed
+capture, never byte-compared.
 
 ### 0.3 — Ingestor (Weir) MVP
 First real work for `geobase-ingestor`. Take a shapefile and a GeoTIFF, package

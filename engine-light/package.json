@@ -8,12 +8,16 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:render": "node scripts/verify-render.mjs"
   },
   "dependencies": {
     "maplibre-gl": "^4.7.1"
   },
   "devDependencies": {
+    "pixelmatch": "^7.1.0",
+    "playwright": "1.61.1",
+    "pngjs": "^7.0.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }
