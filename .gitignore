@@ -39,6 +39,13 @@ place.toml
 .DS_Store
 Thumbs.db
 
+# ── Local working notes — the repo is the Heart; our process stays local ─
+# Session handoffs, AI-assisted planning, and scratch notes never ship.
+docs/handoffs/
+docs/_local/
+*.local.md
+NOTES.local.md
+
 # ── Re-includes (must come last so negation wins) ───────────────────────
 !/data/README.md
 !/data/.gitkeep
