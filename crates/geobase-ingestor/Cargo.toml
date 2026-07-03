@@ -1,6 +1,6 @@
 [package]
 name = "geobase-ingestor"
-description = "Weir — the GeoBase ingestor: packages files/images/shapefiles/databases into TSDF-tagged secure GeoPackages."
+description = "GeoPack — the GeoBase ingestor: packages files/documents/imagery/shapefiles/databases into TSDF-tagged secure GeoPackage bundles."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

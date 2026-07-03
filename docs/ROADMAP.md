@@ -12,7 +12,7 @@ rendered (see [`LESSONS-FROM-PROTOTYPE.md`](LESSONS-FROM-PROTOTYPE.md)).
 |------|------|------|-----------------|
 | **0.1** | Spine / Scaffold | Public repo, monorepo skeleton, TSDF vendored + resolver, core data-model types, docs, CI, Pages placeholder | Repo builds green in CI; `ROADMAP.md` + `TSDF-INTEGRATION.md` published; Pages placeholder live |
 | **0.2** | Baseline render proof | Light Engine loads a terrain/elevation/surface-type **GeoPackage baseline (T0)** and renders true 3D from a **local** source | Headless **screenshot at ~45° pitch** shows displaced terrain (not a flat drape) — the prototype's exact failure, proven fixed |
-| **0.3** | Ingestor (Weir) MVP | Package a shapefile + GeoTIFF into a **TSDF-tagged secure GPKG** with version stamp + audit record | Round-trip: ingest → open in engine → tier + audit metadata present and correct |
+| **0.3** | Ingestor (GeoPack) MVP | Package a shapefile + GeoTIFF into a **TSDF-tagged secure GPKG** with version stamp + audit record | Round-trip: ingest → open in engine → tier + audit metadata present and correct |
 | **1.0** | Desktop Engine core | Rust/Tauri local node: catalog, GPKG vault, local `axum` tile server, `place.toml` grounding | Desktop app opens a grounded node and serves the T0 baseline to its embedded MapLibre |
 | **1.1** | Layer packages | Import GeoPackage/shapefile as stackable **layer packages** (LandCover, Flood, Responsible Siting) with layer UI | Two independent layer packages toggle/stack over the baseline in both engines |
 | **1.2** | TSDF enforcement + ceremony | Tier-based access control, **permissions ceremony (FPIC)** for T2/T3, audit trails, **architectural T3 egress guarantee** | T3 dataset is provably non-exportable/non-networkable; T2 export requires a recorded agreement; audit trail complete |
@@ -45,11 +45,12 @@ assertion in `engine-light/scripts/verify-render.mjs` (run locally pre-push and
 by the `Render Gate` workflow); the committed PNG is the one-time human-endorsed
 capture, never byte-compared.
 
-### 0.3 — Ingestor (Weir) MVP
+### 0.3 — Ingestor (GeoPack) MVP
 First real work for `geobase-ingestor`. Take a shapefile and a GeoTIFF, package
-them into a secure GeoPackage carrying TSDF tier + framework version + an audit
-record. Unclassified inputs default to T3. Round-trip verified by re-opening in
-the engine.
+them into a **GeoPack** — a secure GeoPackage bundle carrying TSDF tier +
+framework version + an audit record. Unclassified inputs default to T3.
+Round-trip verified by re-opening in the engine. (Phase 0.2's
+`scripts/make_t0_baseline.py` is the working sketch this formalizes in Rust.)
 
 ### 1.0 — Desktop Engine core
 `geobase-engine-desktop` gains its Tauri shell and an `axum` local server that
@@ -89,5 +90,8 @@ demonstrated TSDF version-bump adoption flow.
 
 ## Naming still open
 
-- **Ingestor:** proposed **"Weir"** (Coast Salish fishing weir — selectively
-  controls what passes through). Crate id stays `geobase-ingestor` until final.
+- **Ingestor:** current codename **"GeoPack"** — named for the *artifact* it
+  produces: a packed, harmonized, TSDF-tagged bundle of data + documents that
+  enters GeoBase like a zip built for sovereign geodata. (Prior codename
+  "Weir", the Coast Salish fishing weir; its selective-gating idea lives on in
+  tier enforcement.) Crate id stays `geobase-ingestor` until the name is final.

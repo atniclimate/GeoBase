@@ -32,8 +32,9 @@ fixes those root causes by design — see [`docs/LESSONS-FROM-PROTOTYPE.md`](doc
   federation (Rust + Tauri).
 - **Light Engine (`engine-light/`)** — MapLibre GL viewer for web / small apps,
   deployable to GitHub Pages. No cloud-terrain dependency.
-- **Ingestor "Weir" (`crates/geobase-ingestor`)** — packages files, imagery,
-  shapefiles, and databases into TSDF-tagged secure GeoPackages.
+- **Ingestor "GeoPack" (`crates/geobase-ingestor`)** — packages files,
+  documents, imagery, shapefiles, and databases into **GeoPacks**: TSDF-tagged
+  secure GeoPackage bundles, harmonized and ready to serve.
 - **SoLO (`solo/`)** — Sovereign Layer Orchestrator SDK + apps (RStep first).
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the 10-phase plan in

@@ -14,7 +14,7 @@ avoid viewer sprawl (one rendering stack, not 29) and avoid cloud-terrain lock-i
               ┌──────────────────────┼───────────────────────────────┐
               ▼                      ▼                                ▼
    ┌───────────────────┐  ┌────────────────────┐        ┌────────────────────────┐
-   │  Desktop Engine    │  │   Light Engine      │        │  Ingestor ("Weir")     │
+   │  Desktop Engine    │  │   Light Engine      │        │  Ingestor ("GeoPack")  │
    │  (Rust + Tauri)    │  │  (MapLibre GL, TS)  │        │  files/img/shp/db →    │
    │  local node: GPKG  │  │  static web / small │        │  TSDF-tagged secure    │
    │  vault, tile serve,│  │  apps · GitHub Pages│        │  GeoPackage            │
@@ -61,10 +61,11 @@ MapLibre. **No cloud-terrain dependency** — 3D terrain comes from a local
 `raster-dem` source. The desktop engine embeds this same front-end, so there is
 exactly one rendering stack.
 
-### Ingestor "Weir" — `crates/geobase-ingestor`
-Packages arbitrary inputs (files, imagery, shapefiles, databases) into
-TSDF-tagged secure GeoPackages, applying sovereignty compliance uniformly at
-ingest. Unclassified inputs default to T3.
+### Ingestor "GeoPack" — `crates/geobase-ingestor`
+Packages arbitrary inputs (files, documents, imagery, shapefiles, databases)
+into **GeoPacks** — TSDF-tagged secure GeoPackage bundles, harmonized and
+self-describing, like a zip built for sovereign geodata. Sovereignty
+compliance is applied uniformly at ingest; unclassified inputs default to T3.
 
 ### SoLO — `solo/`
 The Sovereign Layer Orchestrator SDK (`solo/sdk`) plus apps. A SoLO app stacks

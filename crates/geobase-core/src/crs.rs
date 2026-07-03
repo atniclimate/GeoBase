@@ -4,7 +4,7 @@
 //! This module carries the *contract* — parse/validate CRS identifiers,
 //! sanity-check bounds (the swapped lon/lat and wrong-UTM-zone class of bug),
 //! and assert that a pipeline hop preserved what it claimed to preserve.
-//! Raster reprojection itself arrives with Weir proper (Phase 0.3).
+//! Raster reprojection itself arrives with the GeoPack ingestor (Phase 0.3).
 
 use crate::Crs;
 

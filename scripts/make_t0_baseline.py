@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Weir-lite: package a terrain DEM + surface grid into a TSDF-tagged T0 baseline GeoPackage.
+"""GeoPack-lite: package a terrain DEM + surface grid into a TSDF-tagged T0 baseline GeoPackage.
 
-This is the Phase 0.2 precursor of the Weir ingestor (Phase 0.3). It applies
+This is the Phase 0.2 precursor of the GeoPack ingestor (Phase 0.3). It applies
 the CRS pipeline discipline from docs/CRS-PIPELINE.md — validate source CRS,
 store native, assert at every hop — and writes TSDF classification metadata
 into standard gpkg_metadata tables so the classification travels with the

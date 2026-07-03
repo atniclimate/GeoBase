@@ -1,13 +1,15 @@
-//! # geobase-ingestor — "Weir"
+//! # geobase-ingestor — "GeoPack"
 //!
-//! The ingestor packages arbitrary inputs — files, imagery, shapefiles,
-//! databases — into **TSDF-tagged secure GeoPackages**, applying sovereignty
-//! compliance uniformly at the point of ingest.
+//! The ingestor packages arbitrary inputs — files, documents, imagery,
+//! shapefiles, databases — into **GeoPacks**: TSDF-tagged secure GeoPackage
+//! bundles, harmonized and sovereignty-compliant at the point of ingest.
 //!
-//! The name **Weir** is a proposal: a weir is traditional Coast Salish fishing
-//! technology that selectively controls what passes through — the exact metaphor
-//! for an ingestor that gates what flows out by TSDF tier. (Name not final; the
-//! crate id stays `geobase-ingestor` so renaming is cheap.)
+//! The name **GeoPack** names the *artifact*, not just the tool: like a zip
+//! or an npm package, a GeoPack is a self-describing container — data +
+//! documents + tier tags + provenance — that enters GeoBase ready to serve.
+//! (Prior codename "Weir", the Coast Salish fishing weir that selectively
+//! controls what passes; the gating idea lives on in tier enforcement. Name
+//! still not final; the crate id stays `geobase-ingestor` so renaming is cheap.)
 //!
 //! Scaffold only — the packaging pipeline lands in roadmap Phase 0.3.
 
@@ -42,7 +44,7 @@ pub fn resolve_tier(req: &IngestRequest) -> Result<(Tier, String), IngestError> 
 /// Not yet implemented — see `docs/ROADMAP.md` Phase 0.3.
 pub fn ingest(_req: &IngestRequest) -> Result<IngestResult, IngestError> {
     Err(IngestError::NotImplemented(
-        "Weir packaging pipeline (roadmap Phase 0.3)",
+        "GeoPack packaging pipeline (roadmap Phase 0.3)",
     ))
 }
 
