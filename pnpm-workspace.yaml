@@ -2,8 +2,3 @@ packages:
   - "engine-light"
   - "solo/sdk"
   - "solo/rstep"
-
-# esbuild ships its platform binary via an optional dependency, so its build
-# script is not required; approving it here only silences pnpm's warning.
-onlyBuiltDependencies:
-  - esbuild
