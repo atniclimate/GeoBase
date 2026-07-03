@@ -1,0 +1,17 @@
+{
+  "name": "@geobase/rstep",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RStep — first SoLO app. Renewable-energy siting: capacity layers, NoGo zones, paint opportunity areas, export T2 shapefile.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@geobase/solo-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

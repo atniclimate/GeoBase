@@ -1,0 +1,28 @@
+# Normalize all text to LF in the repository (CI runs on Linux).
+* text=auto eol=lf
+
+# Explicit text types
+*.rs      text eol=lf
+*.toml    text eol=lf
+*.ts      text eol=lf
+*.js      text eol=lf
+*.json    text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.md      text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+
+# Lockfiles
+Cargo.lock     text eol=lf
+pnpm-lock.yaml text eol=lf
+
+# Binary / geospatial assets (never normalized; also git-ignored, belt & braces)
+*.gpkg   binary
+*.tif    binary
+*.tiff   binary
+*.laz    binary
+*.las    binary
+*.nc     binary
+*.png    binary
+*.jpg    binary

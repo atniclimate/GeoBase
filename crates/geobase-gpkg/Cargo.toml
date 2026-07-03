@@ -1,0 +1,14 @@
+[package]
+name = "geobase-gpkg"
+description = "Secure GeoPackage handling for GeoBase: TSDF metadata tables, audit trail, T3 at-rest encryption."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+geobase-core = { workspace = true }
+geobase-tsdf = { workspace = true }
+thiserror = { workspace = true }

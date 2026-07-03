@@ -1,0 +1,15 @@
+[package]
+name = "geobase-ingestor"
+description = "Weir — the GeoBase ingestor: packages files/images/shapefiles/databases into TSDF-tagged secure GeoPackages."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+geobase-core = { workspace = true }
+geobase-tsdf = { workspace = true }
+geobase-gpkg = { workspace = true }
+thiserror = { workspace = true }

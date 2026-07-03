@@ -1,0 +1,47 @@
+# Tiered Sovereign Data Framework (TSDF) — machine-readable tier definitions.
+#
+# This is GeoBase's VENDORED, PINNED copy of the tier model. It is the offline
+# source of truth loaded by `geobase-tsdf::VendoredSource`. The canonical human
+# framework lives at https://github.com/atniclimate/TieredSovereignDataFramework
+# and evolves by version; when it changes, `GitHubSource` diffs the upstream
+# framework against this file so a sovereign body can review before adoption.
+#
+# DO NOT hand-edit tier semantics casually — a version bump here changes how
+# every dataset in every federated GeoBase node is classified and enforced.
+
+version = "0.9.4"
+default_tier = "T3"
+principle = "When in doubt, classify as T3. Over-classification is correctable; under-classification may cause irreversible harm."
+grounded_in = ["CARE", "OCAP", "UNDRIP"]
+
+[[tier]]
+code = "T0"
+name = "Open/Public"
+definition = "Data formally released for public benefit by sovereign Indigenous decision."
+geobase_behavior = "Federated baseline. Auto-distributed to federated GeoBase nodes."
+ai_training = "permitted"
+ai_inference = "permitted"
+
+[[tier]]
+code = "T1"
+name = "Network"
+definition = "Data shared among Indigenous network members via reciprocal protocols."
+geobase_behavior = "Shared within the Tribal / inter-Tribal network. Network scope only."
+ai_training = "network_approval_required"
+ai_inference = "network_scope_only"
+
+[[tier]]
+code = "T2"
+name = "Negotiated"
+definition = "Data shared with external partners through formal agreements."
+geobase_behavior = "The 'paint & export' partner-sharing path. Exports the derived product only — never source data. Requires a recorded agreement."
+ai_training = "per_agreement_only"
+ai_inference = "per_agreement_only"
+
+[[tier]]
+code = "T3"
+name = "Sovereign"
+definition = "Data under complete Indigenous control; never leaves community systems."
+geobase_behavior = "Local-only. Ceremony-gated. Architectural egress guarantee: no export path, no network path."
+ai_training = "prohibited"
+ai_inference = "prohibited"

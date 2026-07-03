@@ -1,0 +1,46 @@
+# ── Rust ────────────────────────────────────────────────────────────────
+/target
+**/target
+Cargo.lock.orig
+
+# ── Node / TS ───────────────────────────────────────────────────────────
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+.pnpm-store/
+
+# ── GeoBase data — NEVER commit geospatial data or secure vaults ────────
+# Lesson from the prototype: 46 GB of data was co-located with code.
+# Code + specs + small fixtures only. Real data lives outside VCS.
+/data/**
+*.gpkg
+*.tif
+*.tiff
+*.laz
+*.las
+*.nc
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.geojson
+# Secure vaults / TSDF T2–T3 artifacts must never be tracked
+*.sgpkg
+*.vault
+place.toml
+
+# ── Env / secrets / OS ──────────────────────────────────────────────────
+.env
+.env.local
+*.key
+*.pem
+.DS_Store
+Thumbs.db
+
+# ── Re-includes (must come last so negation wins) ───────────────────────
+!/data/README.md
+!/data/.gitkeep
+!/data/fixtures/
+!/data/fixtures/**

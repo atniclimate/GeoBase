@@ -1,0 +1,14 @@
+[package]
+name = "geobase-core"
+description = "GeoBase spine: data model, catalog, CRS pipeline contract, and layer-package API."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+geobase-tsdf = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

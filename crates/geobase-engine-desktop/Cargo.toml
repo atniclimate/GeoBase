@@ -1,0 +1,19 @@
+[package]
+name = "geobase-engine-desktop"
+description = "GeoBase Desktop Engine: the local federated node — catalog, secure GPKG vault, local tile server, TSDF enforcement."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+geobase-core = { workspace = true }
+geobase-tsdf = { workspace = true }
+geobase-gpkg = { workspace = true }
+geobase-ingestor = { workspace = true }
+thiserror = { workspace = true }
+
+# NOTE: Tauri (desktop shell) and axum (local tile/federation server) are added
+# in roadmap Phase 1.0. Kept out of the scaffold to keep the initial build light.

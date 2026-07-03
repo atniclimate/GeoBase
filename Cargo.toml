@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/geobase-core",
+    "crates/geobase-tsdf",
+    "crates/geobase-gpkg",
+    "crates/geobase-ingestor",
+    "crates/geobase-engine-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/atniclimate/GeoBase"
+authors = ["Affiliated Tribes of Northwest Indians — Tribal Climate Resilience <climatechange@atnitribes.org>"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "1"
+
+# Internal crates
+geobase-core = { path = "crates/geobase-core" }
+geobase-tsdf = { path = "crates/geobase-tsdf" }
+geobase-gpkg = { path = "crates/geobase-gpkg" }
+geobase-ingestor = { path = "crates/geobase-ingestor" }

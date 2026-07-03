@@ -1,0 +1,22 @@
+# place.toml — "grounded to place" configuration for a GeoBase node.
+#
+# Copy to `place.toml` (git-ignored) and edit for your node. A node is bound to a
+# territory; T2/T3 datasets are pinned to it and never leave. This binding is
+# what makes the sovereignty guarantees enforceable per node.
+
+[node]
+id = "example-node"
+territory = "Example Territory"
+
+[grounding]
+# Home CRS hint for the territory. Data is still stored in its native CRS and
+# reprojected to EPSG:3857 for viewing (see docs/CRS-PIPELINE.md).
+home_crs = "EPSG:3857"
+# Optional bounding box of the territory in WGS84 [west, south, east, north].
+bbox = [-123.10, 47.05, -122.74, 47.29]
+
+[tsdf]
+# Where this node reads its tier model from: "vendored" | "github" | "local-server".
+# Migration between these is a config change, not a code change.
+source = "vendored"
+# endpoint = "https://tsdf.internal"   # required when source = "local-server"

@@ -1,0 +1,20 @@
+{
+  "name": "@geobase/engine-light",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GeoBase Light Engine — MapLibre GL viewer for web and small-app deployment. No cloud terrain dependency.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "maplibre-gl": "^4.7.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
