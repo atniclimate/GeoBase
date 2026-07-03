@@ -85,3 +85,8 @@ ambiguous before it is offered across the bridge.
   lightest-honest-3D assessment (MapLibre native terrain over local
   raster-dem) converges with this repository's phase 0.2 render proof.
   Counterpart file: DDM `docs/interop/GEOBASE-BRIDGE.md`.
+- 2026-07-03 (GeoBase): first pattern borrowed over the bridge. The Pages
+  deploy transient ("Deployment failed, try again later" at the status
+  poll) hit this repository twice; `.github/workflows/pages.yml` now
+  carries the DDM's dependency-free in-workflow retry (continue-on-error
+  first attempt, 30-second settle, gated second attempt).
