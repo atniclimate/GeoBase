@@ -29,6 +29,7 @@ pub mod crs_id;
 pub mod geotiff;
 pub mod shp;
 
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -155,6 +156,26 @@ fn file_name_of(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+fn staging_path_for(path: &Path) -> PathBuf {
+    let mut file_name: OsString = path
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| OsString::from("geopack"));
+    file_name.push(".ingest-tmp");
+    path.with_file_name(file_name)
+}
+
+fn shapefile_sidecars(path: &Path) -> Result<Map<String, Value>, IngestError> {
+    let mut sidecars = Map::new();
+    for ext in ["dbf", "shx", "prj", "cpg"] {
+        let candidate = path.with_extension(ext);
+        if candidate.exists() {
+            sidecars.insert(format!(".{ext}"), json!(sha256_hex(&candidate)?));
+        }
+    }
+    Ok(sidecars)
+}
+
 /// How the raster CRS was established (vector-side lives in [`shp`]).
 enum RasterCrs {
     FromGeoKeys(u32),
@@ -221,235 +242,256 @@ pub fn ingest(req: &IngestRequest) -> Result<IngestResult, IngestError> {
     };
     let vector = shp::read_shapefile(&req.shapefile, req.declared_epsg)?;
 
-    // Hop 2 — create the artifact.
-    if req.out.exists() {
-        if req.overwrite {
-            std::fs::remove_file(&req.out)?;
-        } else {
-            return Err(IngestError::Invalid(format!(
-                "{} already exists (pass overwrite/--force to replace)",
-                req.out.display()
-            )));
+    if req.out.exists() && !req.overwrite {
+        return Err(IngestError::Invalid(format!(
+            "{} already exists (pass overwrite/--force to replace)",
+            req.out.display()
+        )));
+    }
+    let staging = staging_path_for(&req.out);
+    let _ = std::fs::remove_file(&staging);
+
+    let result = (|| -> Result<IngestResult, IngestError> {
+        // Hop 2 — create the staging artifact.
+        let gpkg = GeoPackage::create(&staging)?;
+
+        // Hop 3 — raster coverage FIRST (write-ordering invariant), native CRS.
+        let raster_table = table_name_from(&req.geotiff, "raster");
+        let mut vector_table = table_name_from(&req.shapefile, "features");
+        if vector_table == raster_table {
+            vector_table.push_str("_vec");
         }
-    }
-    let gpkg = GeoPackage::create(&req.out)?;
+        let stats = write_gridded_coverage(
+            &gpkg,
+            &RasterCoverageSpec {
+                table: raster_table.clone(),
+                identifier: format!("{} — {}", req.dataset_id, raster_table),
+                srs_epsg: raster_crs.epsg(),
+                srs_definition: None,
+                width: raster.width,
+                height: raster.height,
+                pixel_size: raster.pixel_size,
+                origin: raster.origin,
+                tile_size: 256,
+                data_null: raster.nodata,
+            },
+            match &raster.data {
+                geotiff::RasterData::F32(v) => CoverageData::F32(v),
+                geotiff::RasterData::I16(v) => CoverageData::I16(v),
+            },
+        )?;
 
-    // Hop 3 — raster coverage FIRST (write-ordering invariant), native CRS.
-    let raster_table = table_name_from(&req.geotiff, "raster");
-    let mut vector_table = table_name_from(&req.shapefile, "features");
-    if vector_table == raster_table {
-        vector_table.push_str("_vec");
-    }
-    let stats = write_gridded_coverage(
-        &gpkg,
-        &RasterCoverageSpec {
-            table: raster_table.clone(),
-            identifier: format!("{} — {}", req.dataset_id, raster_table),
-            srs_epsg: raster_crs.epsg(),
-            srs_definition: None,
-            width: raster.width,
-            height: raster.height,
-            pixel_size: raster.pixel_size,
-            origin: raster.origin,
-            tile_size: 256,
-            data_null: raster.nodata,
-        },
-        match &raster.data {
-            geotiff::RasterData::F32(v) => CoverageData::F32(v),
-            geotiff::RasterData::I16(v) => CoverageData::I16(v),
-        },
-    )?;
-
-    // Hop 4 — vector layer, native CRS.
-    create_feature_table(
-        &gpkg,
-        &FeatureTableSpec {
-            table: vector_table.clone(),
-            identifier: format!("{} — {}", req.dataset_id, vector_table),
-            srs_epsg: vector.crs.epsg(),
-            srs_definition: vector.prj_wkt.clone(),
-            geometry_type: vector.geometry_type.gpkg_name().to_string(),
-            columns: vector
-                .fields
+        // Hop 4 — vector layer, native CRS.
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: vector_table.clone(),
+                identifier: format!("{} — {}", req.dataset_id, vector_table),
+                srs_epsg: vector.crs.epsg(),
+                srs_definition: vector.prj_wkt.clone(),
+                geometry_type: vector.geometry_type.gpkg_name().to_string(),
+                columns: vector
+                    .fields
+                    .iter()
+                    .map(|f| ColumnDef {
+                        name: f.name.clone(),
+                        sql_type: f.sql_type,
+                    })
+                    .collect(),
+                bounds: vector.bounds,
+            },
+        )?;
+        for feature in &vector.features {
+            let attrs: Vec<rusqlite::types::Value> = feature
+                .attrs
                 .iter()
-                .map(|f| ColumnDef {
-                    name: f.name.clone(),
-                    sql_type: f.sql_type,
+                .map(|a| match a {
+                    shp::AttrValue::Null => rusqlite::types::Value::Null,
+                    shp::AttrValue::Text(s) => rusqlite::types::Value::Text(s.clone()),
+                    shp::AttrValue::Integer(i) => rusqlite::types::Value::Integer(*i),
+                    shp::AttrValue::Real(f) => rusqlite::types::Value::Real(*f),
                 })
-                .collect(),
-            bounds: vector.bounds,
-        },
-    )?;
-    for feature in &vector.features {
-        let attrs: Vec<rusqlite::types::Value> = feature
-            .attrs
-            .iter()
-            .map(|a| match a {
-                shp::AttrValue::Null => rusqlite::types::Value::Null,
-                shp::AttrValue::Text(s) => rusqlite::types::Value::Text(s.clone()),
-                shp::AttrValue::Integer(i) => rusqlite::types::Value::Integer(*i),
-                shp::AttrValue::Real(f) => rusqlite::types::Value::Real(*f),
-            })
-            .collect();
-        insert_feature(&gpkg, &vector_table, &feature.geom, &attrs)?;
-    }
+                .collect();
+            insert_feature(&gpkg, &vector_table, &feature.geom, &attrs)?;
+        }
 
-    // Hop 5 — classification travels with the artifact.
-    let tif_sha = sha256_hex(&req.geotiff)?;
-    let shp_sha = sha256_hex(&req.shapefile)?;
-    let basis = req.classification_basis.clone().unwrap_or_else(|| {
-        format!(
-            "unspecified — TSDF default posture applied (tier {}); \
+        // Hop 5 — classification travels with the artifact.
+        let tif_sha = sha256_hex(&req.geotiff)?;
+        let shp_sha = sha256_hex(&req.shapefile)?;
+        let shp_sidecars = shapefile_sidecars(&req.shapefile)?;
+        let basis = req.classification_basis.clone().unwrap_or_else(|| {
+            format!(
+                "unspecified — TSDF default posture applied (tier {}); \
              no sovereign classification process ran for this ingest",
-            tier.code()
-        )
-    });
-    let vector_crs_method = match &vector.crs {
-        shp::CrsResolution::Identified { method, .. } => *method,
-        shp::CrsResolution::OperatorDeclared { .. } => "operator-declared",
-    };
-    let mut raster_extras = Map::new();
-    raster_extras.insert("classification_basis".into(), json!(basis));
-    raster_extras.insert(
-        "source".into(),
-        json!({ "file": file_name_of(&req.geotiff), "sha256": tif_sha }),
-    );
-    raster_extras.insert(
-        "native_crs".into(),
-        json!(format!("EPSG:{}", raster_crs.epsg())),
-    );
-    raster_extras.insert("crs_method".into(), json!(raster_crs.method()));
-    let mut vector_extras = Map::new();
-    vector_extras.insert("classification_basis".into(), json!(basis));
-    vector_extras.insert(
-        "source".into(),
-        json!({ "file": file_name_of(&req.shapefile), "sha256": shp_sha }),
-    );
-    vector_extras.insert(
-        "native_crs".into(),
-        json!(format!("EPSG:{}", vector.crs.epsg())),
-    );
-    vector_extras.insert("crs_method".into(), json!(vector_crs_method));
-    let mut rollup_extras = Map::new();
-    rollup_extras.insert(
-        "rule".into(),
-        json!("most restrictive of table tiers (geobase_core::LayerPackage::effective_tier)"),
-    );
-    rollup_extras.insert("dataset_id".into(), json!(req.dataset_id));
-    for (table, extras) in [
-        (Some(raster_table.clone()), raster_extras),
-        (Some(vector_table.clone()), vector_extras),
-        (None, rollup_extras),
-    ] {
-        gpkg.write_tsdf_tag(&TsdfTag {
-            table,
-            tier,
+                tier.code()
+            )
+        });
+        let vector_crs_method = match &vector.crs {
+            shp::CrsResolution::Identified { method, .. } => *method,
+            shp::CrsResolution::OperatorDeclared { .. } => "operator-declared",
+        };
+        let mut raster_extras = Map::new();
+        raster_extras.insert("classification_basis".into(), json!(basis));
+        raster_extras.insert(
+            "source".into(),
+            json!({ "file": file_name_of(&req.geotiff), "sha256": tif_sha }),
+        );
+        raster_extras.insert(
+            "native_crs".into(),
+            json!(format!("EPSG:{}", raster_crs.epsg())),
+        );
+        raster_extras.insert("crs_method".into(), json!(raster_crs.method()));
+        let mut vector_extras = Map::new();
+        vector_extras.insert("classification_basis".into(), json!(basis));
+        vector_extras.insert(
+            "source".into(),
+            json!({
+                "file": file_name_of(&req.shapefile),
+                "sha256": shp_sha,
+                "sidecars": shp_sidecars.clone(),
+            }),
+        );
+        vector_extras.insert(
+            "native_crs".into(),
+            json!(format!("EPSG:{}", vector.crs.epsg())),
+        );
+        vector_extras.insert("crs_method".into(), json!(vector_crs_method));
+        let mut rollup_extras = Map::new();
+        rollup_extras.insert(
+            "rule".into(),
+            json!("most restrictive of table tiers (geobase_core::LayerPackage::effective_tier)"),
+        );
+        rollup_extras.insert("dataset_id".into(), json!(req.dataset_id));
+        for (table, extras) in [
+            (Some(raster_table.clone()), raster_extras),
+            (Some(vector_table.clone()), vector_extras),
+            (None, rollup_extras),
+        ] {
+            gpkg.write_tsdf_tag(&TsdfTag {
+                table,
+                tier,
+                tsdf_version: tsdf_version.clone(),
+                tsdf_source_origin: tsdf_origin.clone(),
+                classified_by: req.actor.clone(),
+                extras,
+            })?;
+        }
+
+        // Hop 6 — audit trail (append-only by trigger).
+        let audit = |action: &str, details: Value| AuditEntry {
+            dataset_id: req.dataset_id.clone(),
+            action: action.to_string(),
+            actor: req.actor.clone(),
             tsdf_version: tsdf_version.clone(),
             tsdf_source_origin: tsdf_origin.clone(),
-            classified_by: req.actor.clone(),
-            extras,
-        })?;
-    }
-
-    // Hop 6 — audit trail (append-only by trigger).
-    let audit = |action: &str, details: Value| AuditEntry {
-        dataset_id: req.dataset_id.clone(),
-        action: action.to_string(),
-        actor: req.actor.clone(),
-        tsdf_version: tsdf_version.clone(),
-        tsdf_source_origin: tsdf_origin.clone(),
-        details,
-    };
-    if matches!(raster_crs, RasterCrs::OperatorDeclared(_))
-        || matches!(vector.crs, shp::CrsResolution::OperatorDeclared { .. })
-    {
+            details,
+        };
+        if matches!(raster_crs, RasterCrs::OperatorDeclared(_))
+            || matches!(vector.crs, shp::CrsResolution::OperatorDeclared { .. })
+        {
+            gpkg.append_audit(&audit(
+                "crs.operator-declared",
+                json!({
+                    "epsg": req.declared_epsg,
+                    "reason": req.declared_crs_reason,
+                    "applies_to": {
+                        "raster": matches!(raster_crs, RasterCrs::OperatorDeclared(_)),
+                        "vector": matches!(vector.crs, shp::CrsResolution::OperatorDeclared { .. }),
+                    },
+                }),
+            ))?;
+        }
         gpkg.append_audit(&audit(
-            "crs.operator-declared",
+            "ingest.raster",
             json!({
-                "epsg": req.declared_epsg,
-                "reason": req.declared_crs_reason,
-                "applies_to": {
-                    "raster": matches!(raster_crs, RasterCrs::OperatorDeclared(_)),
-                    "vector": matches!(vector.crs, shp::CrsResolution::OperatorDeclared { .. }),
-                },
+                "table": raster_table,
+                "source": { "file": file_name_of(&req.geotiff), "sha256": tif_sha },
+                "epsg": raster_crs.epsg(),
+                "crs_method": raster_crs.method(),
+                "tiles": stats.tiles_written,
+                "matrix": [stats.matrix_width, stats.matrix_height],
+                "nodata_cells": stats.nodata_cells,
             }),
         ))?;
-    }
-    gpkg.append_audit(&audit(
-        "ingest.raster",
-        json!({
-            "table": raster_table,
-            "source": { "file": file_name_of(&req.geotiff), "sha256": tif_sha },
-            "epsg": raster_crs.epsg(),
-            "crs_method": raster_crs.method(),
-            "tiles": stats.tiles_written,
-            "matrix": [stats.matrix_width, stats.matrix_height],
-            "nodata_cells": stats.nodata_cells,
-        }),
-    ))?;
-    gpkg.append_audit(&audit(
-        "ingest.vector",
-        json!({
-            "table": vector_table,
-            "source": { "file": file_name_of(&req.shapefile), "sha256": shp_sha },
-            "epsg": vector.crs.epsg(),
-            "crs_method": vector_crs_method,
-            "features": vector.features.len(),
-        }),
-    ))?;
-    gpkg.append_audit(&audit(
-        "ingest.complete",
-        json!({
-            "tier": tier.code(),
-            "tables": [raster_table, vector_table],
-            "geopack": file_name_of(&req.out),
-        }),
-    ))?;
+        gpkg.append_audit(&audit(
+            "ingest.vector",
+            json!({
+                "table": vector_table,
+                "source": {
+                    "file": file_name_of(&req.shapefile),
+                    "sha256": shp_sha,
+                    "sidecars": shp_sidecars,
+                },
+                "epsg": vector.crs.epsg(),
+                "crs_method": vector_crs_method,
+                "features": vector.features.len(),
+            }),
+        ))?;
+        gpkg.append_audit(&audit(
+            "ingest.complete",
+            json!({
+                "tier": tier.code(),
+                "tables": [raster_table, vector_table],
+                "geopack": file_name_of(&req.out),
+            }),
+        ))?;
 
-    // Hop 7 — artifact-level verification: reopen and check the COMPLETE
-    // artifact, so a future reorder or dropped hop fails loudly, not silently.
-    drop(gpkg);
-    let check = GeoPackage::open(&req.out)?;
-    let contents: i64 = check.conn().query_row(
+        // Hop 7 — artifact-level verification: reopen and check the COMPLETE
+        // artifact, so a future reorder or dropped hop fails loudly, not silently.
+        drop(gpkg);
+        let check = GeoPackage::open(&staging)?;
+        let contents: i64 = check.conn().query_row(
         "SELECT COUNT(*) FROM gpkg_contents WHERE data_type IN ('2d-gridded-coverage','features')",
         [],
         |r| r.get(0),
     ).map_err(geobase_gpkg::GpkgError::from)?;
-    if contents != 2 {
-        return Err(IngestError::Invalid(format!(
+        if contents != 2 {
+            return Err(IngestError::Invalid(format!(
             "verification failed: expected 2 content tables (coverage + features), found {contents}"
         )));
-    }
-    let tags = check.read_tsdf_tags()?;
-    if tags.len() != 3 {
-        return Err(IngestError::Invalid(format!(
-            "verification failed: expected 3 TSDF tags, found {}",
-            tags.len()
-        )));
-    }
-    if check.geopackage_tier()? != Some(tier) {
-        return Err(IngestError::Invalid(
-            "verification failed: whole-artifact tier does not match the requested tier".into(),
-        ));
-    }
-    let trail = check.audit_trail()?;
-    if trail.len() < 3 {
-        return Err(IngestError::Invalid(format!(
-            "verification failed: expected >= 3 audit records, found {}",
-            trail.len()
-        )));
-    }
+        }
+        let tags = check.read_tsdf_tags()?;
+        if tags.len() != 3 {
+            return Err(IngestError::Invalid(format!(
+                "verification failed: expected 3 TSDF tags, found {}",
+                tags.len()
+            )));
+        }
+        if check.geopackage_tier()? != Some(tier) {
+            return Err(IngestError::Invalid(
+                "verification failed: whole-artifact tier does not match the requested tier".into(),
+            ));
+        }
+        let trail = check.audit_trail()?;
+        if trail.len() < 3 {
+            return Err(IngestError::Invalid(format!(
+                "verification failed: expected >= 3 audit records, found {}",
+                trail.len()
+            )));
+        }
+        drop(check);
 
-    Ok(IngestResult {
-        geopack: req.out.clone(),
-        dataset_id: req.dataset_id.clone(),
-        tier,
-        tsdf_version,
-        raster_table,
-        vector_table,
-        tiles_written: stats.tiles_written,
-        features_written: vector.features.len(),
-    })
+        if req.out.exists() {
+            std::fs::remove_file(&req.out)?;
+        }
+        std::fs::rename(&staging, &req.out)?;
+
+        Ok(IngestResult {
+            geopack: req.out.clone(),
+            dataset_id: req.dataset_id.clone(),
+            tier,
+            tsdf_version,
+            raster_table,
+            vector_table,
+            tiles_written: stats.tiles_written,
+            features_written: vector.features.len(),
+        })
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staging);
+    }
+    result
 }
 
 #[cfg(test)]

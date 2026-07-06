@@ -304,11 +304,7 @@ fn geometry_type_of(geometry: &Geometry<f64>, path: &str) -> Result<GeometryType
 
 /// The layer's canonical attribute order, frozen from the first record.
 fn field_names_of(record: &Record) -> Vec<String> {
-    record
-        .clone()
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect()
+    record.clone().into_iter().map(|(name, _)| name).collect()
 }
 
 fn fields_for(names: &[String], record: &Record) -> Vec<FieldDef> {
@@ -385,7 +381,13 @@ fn attr_value(value: &FieldValue) -> AttrValue {
         FieldValue::Date(v) => v
             .as_ref()
             .map_or(AttrValue::Null, |d| AttrValue::Text(d.to_string())),
-        FieldValue::DateTime(_) => AttrValue::Null,
+        FieldValue::DateTime(v) => AttrValue::Text(format!(
+            "{}T{:02}:{:02}:{:02}",
+            v.date(),
+            v.time().hours(),
+            v.time().minutes(),
+            v.time().seconds()
+        )),
         FieldValue::Memo(v) => AttrValue::Text(v.clone()),
     }
 }

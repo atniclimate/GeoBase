@@ -92,8 +92,24 @@ pub fn create_feature_table(gpkg: &GeoPackage, spec: &FeatureTableSpec) -> Resul
         )));
     }
 
-    gpkg.ensure_srs(spec.srs_epsg, spec.srs_definition.as_deref())?;
-    conn.execute_batch(
+    let wkt = match spec.srs_definition.as_deref() {
+        Some(d) if !d.trim().is_empty() => d.to_string(),
+        _ => crate::known_epsg_wkt(spec.srs_epsg).ok_or_else(|| {
+            GpkgError::Invalid(format!(
+                "EPSG:{} has no source WKT and is not in the curated SRS table — \
+                 cannot write a definition the viewer stack can parse",
+                spec.srs_epsg
+            ))
+        })?,
+    };
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT OR IGNORE INTO gpkg_spatial_ref_sys
+         (srs_name, srs_id, organization, organization_coordsys_id, definition)
+         VALUES (?1, ?2, 'EPSG', ?2, ?3)",
+        rusqlite::params![format!("EPSG:{}", spec.srs_epsg), spec.srs_epsg, wkt],
+    )?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS gpkg_geometry_columns (
            table_name TEXT NOT NULL,
            column_name TEXT NOT NULL,
@@ -112,7 +128,7 @@ pub fn create_feature_table(gpkg: &GeoPackage, spec: &FeatureTableSpec) -> Resul
     for column in &spec.columns {
         column_sql.push_str(&format!(", \"{}\" {}", column.name, column.sql_type));
     }
-    conn.execute(
+    tx.execute(
         &format!(
             "CREATE TABLE \"{}\" (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +138,7 @@ pub fn create_feature_table(gpkg: &GeoPackage, spec: &FeatureTableSpec) -> Resul
         ),
         [],
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO gpkg_contents
          (table_name, data_type, identifier, min_x, min_y, max_x, max_y, srs_id)
          VALUES (?1, 'features', ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -136,12 +152,13 @@ pub fn create_feature_table(gpkg: &GeoPackage, spec: &FeatureTableSpec) -> Resul
             i64::from(spec.srs_epsg),
         ],
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO gpkg_geometry_columns
          (table_name, column_name, geometry_type_name, srs_id, z, m)
          VALUES (?1, 'geom', ?2, ?3, 0, 0)",
         rusqlite::params![spec.table, spec.geometry_type, i64::from(spec.srs_epsg)],
     )?;
+    tx.commit()?;
     Ok(())
 }
 

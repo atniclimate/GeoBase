@@ -399,6 +399,13 @@ fn validate_spec(spec: &RasterCoverageSpec, data: CoverageData<'_>) -> Result<()
                 spec.table
             )));
         }
+        if f64::from(null as f32) != null {
+            return Err(GpkgError::Invalid(format!(
+                "coverage '{}': data_null must be exactly representable as f32 — \
+                 choose a representable NoData value",
+                spec.table
+            )));
+        }
     }
     let expected = u64::from(spec.width) * u64::from(spec.height);
     let actual = match data {
@@ -1045,5 +1052,29 @@ mod tests {
             .unwrap_err();
             assert!(matches!(err, GpkgError::Invalid(_)));
         }
+    }
+
+    #[test]
+    fn data_null_must_be_exactly_representable_as_f32() {
+        let path = temp_gpkg("representable-null.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        let src: Vec<f32> = vec![1.0; 16];
+        let err = write_gridded_coverage(
+            &gpkg,
+            &spec("bad_null", 4, 4, Some(0.1)),
+            CoverageData::F32(&src),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("representable NoData"),
+            "got: {err}"
+        );
+
+        write_gridded_coverage(
+            &gpkg,
+            &spec("good_null", 4, 4, Some(-9999.0)),
+            CoverageData::F32(&src),
+        )
+        .unwrap();
     }
 }

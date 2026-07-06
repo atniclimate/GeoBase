@@ -319,6 +319,32 @@ impl GeoPackage {
     /// artifact tag uses `"geopackage"` with NULL table.
     pub fn write_tsdf_tag(&self, tag: &TsdfTag) -> Result<i64, GpkgError> {
         self.ensure_geobase_tables()?;
+        if tag.table.is_some() {
+            let basis = tag
+                .extras
+                .get("classification_basis")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if basis.is_empty() {
+                return Err(GpkgError::Invalid(
+                    "table-scope TSDF tag missing non-empty classification_basis".into(),
+                ));
+            }
+            let sha256 = tag
+                .extras
+                .get("source")
+                .and_then(Value::as_object)
+                .and_then(|source| source.get("sha256"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if sha256.is_empty() {
+                return Err(GpkgError::Invalid(
+                    "table-scope TSDF tag missing source.sha256".into(),
+                ));
+            }
+        }
         let mut payload = Map::new();
         payload.insert("tier".into(), Value::String(tag.tier.code().to_string()));
         payload.insert(
@@ -401,14 +427,11 @@ impl GeoPackage {
         Ok(tags)
     }
 
-    /// The whole-artifact tier: the geopackage-scope tag if present, else the
-    /// most restrictive table tag, else `None` (untagged artifact —
-    /// callers must treat that as T3 per the TSDF default posture).
+    /// The whole-artifact tier: the most restrictive tier across all TSDF tags.
+    /// A geopackage-scope roll-up tag may raise the effective tier, never lower
+    /// it below a more restrictive table tag.
     pub fn geopackage_tier(&self) -> Result<Option<Tier>, GpkgError> {
         let tags = self.read_tsdf_tags()?;
-        if let Some(pkg) = tags.iter().find(|t| t.scope == "geopackage") {
-            return Ok(Some(pkg.tier));
-        }
         Ok(tags.iter().map(|t| t.tier).max())
     }
 
@@ -450,20 +473,42 @@ impl GeoPackage {
              timestamp, details FROM geobase_audit ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(AuditRecord {
-                id: r.get(0)?,
-                dataset_id: r.get(1)?,
-                action: r.get(2)?,
-                actor: r.get(3)?,
-                tsdf_version: r.get(4)?,
-                tsdf_source_origin: r.get(5)?,
-                timestamp: r.get(6)?,
-                details: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or(Value::Null),
-            })
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, String>(7)?,
+            ))
         })?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(row?);
+            let (
+                id,
+                dataset_id,
+                action,
+                actor,
+                tsdf_version,
+                tsdf_source_origin,
+                timestamp,
+                raw_details,
+            ) = row?;
+            let details = serde_json::from_str(&raw_details).map_err(|e| {
+                GpkgError::Invalid(format!("audit row id {id} has corrupt details JSON: {e}"))
+            })?;
+            records.push(AuditRecord {
+                id,
+                dataset_id,
+                action,
+                actor,
+                tsdf_version,
+                tsdf_source_origin,
+                timestamp,
+                details,
+            });
         }
         Ok(records)
     }
@@ -539,6 +584,19 @@ mod tests {
         }
     }
 
+    fn compliant_table_extras() -> Map<String, Value> {
+        let mut extras = Map::new();
+        extras.insert(
+            "classification_basis".into(),
+            Value::String("test basis".into()),
+        );
+        extras.insert(
+            "source".into(),
+            serde_json::json!({"file": "fixture", "sha256": "abc123"}),
+        );
+        extras
+    }
+
     #[test]
     fn create_then_open_roundtrip() {
         let path = temp_gpkg("roundtrip.gpkg");
@@ -573,7 +631,7 @@ mod tests {
     fn tsdf_tag_write_read_roundtrip_matches_python_schema() {
         let path = temp_gpkg("tags.gpkg");
         let gpkg = GeoPackage::create(&path).unwrap();
-        let mut extras = Map::new();
+        let mut extras = compliant_table_extras();
         extras.insert("native_crs".into(), Value::String("EPSG:26910".into()));
         gpkg.write_tsdf_tag(&TsdfTag {
             table: Some("dem".into()),
@@ -597,7 +655,9 @@ mod tests {
             "tsdf_source_origin",
             "classified_on",
             "classified_by",
+            "classification_basis",
             "native_crs",
+            "source",
         ] {
             assert!(table_tag.payload.get(key).is_some(), "missing key {key}");
         }
@@ -605,33 +665,75 @@ mod tests {
     }
 
     #[test]
-    fn geopackage_tier_prefers_rollup_then_most_restrictive() {
+    fn table_scope_tsdf_tag_requires_provenance() {
+        let path = temp_gpkg("tag-provenance.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        let err = gpkg
+            .write_tsdf_tag(&TsdfTag {
+                table: Some("dem".into()),
+                tier: Tier::T1,
+                ..t0_tag(None)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("classification_basis"));
+
+        let mut extras = Map::new();
+        extras.insert("classification_basis".into(), Value::String("basis".into()));
+        let err = gpkg
+            .write_tsdf_tag(&TsdfTag {
+                table: Some("dem".into()),
+                tier: Tier::T1,
+                extras,
+                ..t0_tag(None)
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("source.sha256"));
+    }
+
+    #[test]
+    fn geopackage_tier_is_most_restrictive_across_all_tags() {
         let path = temp_gpkg("tier.gpkg");
         let gpkg = GeoPackage::create(&path).unwrap();
         assert_eq!(gpkg.geopackage_tier().unwrap(), None);
 
         gpkg.write_tsdf_tag(&TsdfTag {
             table: Some("a".into()),
-            tier: Tier::T1,
-            ..t0_tag(None)
-        })
-        .unwrap();
-        gpkg.write_tsdf_tag(&TsdfTag {
-            table: Some("b".into()),
             tier: Tier::T3,
+            extras: compliant_table_extras(),
             ..t0_tag(None)
         })
         .unwrap();
-        // No roll-up row yet: most restrictive table tag wins.
-        assert_eq!(gpkg.geopackage_tier().unwrap(), Some(Tier::T3));
-
         gpkg.write_tsdf_tag(&TsdfTag {
             tier: Tier::T2,
             ..t0_tag(None)
         })
         .unwrap();
-        // Explicit geopackage-scope tag takes precedence.
-        assert_eq!(gpkg.geopackage_tier().unwrap(), Some(Tier::T2));
+        // Roll-up T2 may not lower a table-scope T3.
+        assert_eq!(gpkg.geopackage_tier().unwrap(), Some(Tier::T3));
+
+        let path = temp_gpkg("tier-rollup-raises.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: Some("a".into()),
+            tier: Tier::T0,
+            extras: compliant_table_extras(),
+            ..t0_tag(None)
+        })
+        .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: Some("b".into()),
+            tier: Tier::T0,
+            extras: compliant_table_extras(),
+            ..t0_tag(None)
+        })
+        .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            tier: Tier::T3,
+            ..t0_tag(None)
+        })
+        .unwrap();
+        // Roll-up T3 raises the package above T0 tables.
+        assert_eq!(gpkg.geopackage_tier().unwrap(), Some(Tier::T3));
     }
 
     #[test]
@@ -675,6 +777,22 @@ mod tests {
         assert!(update.is_err(), "UPDATE must be rejected by trigger");
         let delete = gpkg.conn().execute("DELETE FROM geobase_audit", []);
         assert!(delete.is_err(), "DELETE must be rejected by trigger");
+    }
+
+    #[test]
+    fn audit_trail_rejects_corrupt_details_json() {
+        let path = temp_gpkg("audit-corrupt.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO geobase_audit
+                 (dataset_id, action, actor, tsdf_version, tsdf_source_origin, details)
+                 VALUES ('demo', 'ingest', 'test', '0.9.4', 'vendored:embedded', '{')",
+                [],
+            )
+            .unwrap();
+        let err = gpkg.audit_trail().unwrap_err();
+        assert!(err.to_string().contains("audit row id 1"));
     }
 
     #[test]
