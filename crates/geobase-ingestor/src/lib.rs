@@ -27,6 +27,7 @@
 
 pub mod crs_id;
 pub mod geotiff;
+pub mod package;
 pub mod shp;
 
 use std::ffi::OsString;
@@ -137,7 +138,10 @@ pub fn table_name_from(path: &Path, fallback: &str) -> String {
 }
 
 fn sha256_hex(path: &Path) -> Result<String, IngestError> {
-    let mut file = std::fs::File::open(path)?;
+    // Name the file: a missing/unreadable input must fail loudly enough to
+    // act on, not as a bare os-error with no subject.
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| IngestError::Invalid(format!("{}: {e}", path.display())))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {

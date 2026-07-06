@@ -1132,6 +1132,7 @@ dependencies = [
  "geozero",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "thiserror 1.0.69",
@@ -1164,11 +1165,13 @@ dependencies = [
  "geobase-tsdf",
  "geozero",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "shapefile",
  "thiserror 1.0.69",
  "tiff",
+ "toml 0.8.23",
 ]
 
 [[package]]
