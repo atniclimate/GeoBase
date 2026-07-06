@@ -29,6 +29,7 @@ pub mod crs_id;
 pub mod geotiff;
 pub mod package;
 pub mod shp;
+pub mod shp_write;
 
 use std::ffi::OsString;
 use std::io::Read;

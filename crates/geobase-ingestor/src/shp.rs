@@ -155,6 +155,20 @@ pub fn read_shapefile(path: &Path, declared_epsg: Option<u32>) -> Result<VectorL
         path: path_label.clone(),
         detail: e.to_string(),
     })?;
+    // Column order comes from the DBF HEADER (declaration order). A
+    // record's iteration order is a hash-map artifact: values were
+    // already extracted by name (the 0.3 fix), but deriving the ORDER
+    // from the first record still scrambled columns vs. the artifact.
+    let dbf_path = path.with_extension("dbf");
+    let header_names: Vec<String> = shapefile::dbase::Reader::from_path(&dbf_path)
+        .map_err(|e| ShpError::Decode {
+            path: path_label.clone(),
+            detail: format!("{}: {e}", dbf_path.display()),
+        })?
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect();
     let mut field_names: Option<Vec<String>> = None;
     let mut fields: Option<Vec<FieldDef>> = None;
     let mut geometry_type: Option<GeometryType> = None;
@@ -166,13 +180,11 @@ pub fn read_shapefile(path: &Path, declared_epsg: Option<u32>) -> Result<VectorL
             path: path_label.clone(),
             detail: e.to_string(),
         })?;
-        // Column order is frozen from the FIRST record; every record's
-        // values are then extracted BY NAME. Iterating a record directly
-        // is order-nondeterministic and scrambles columns across features.
+        // Values are extracted BY NAME in the header's declaration
+        // order; the first record only supplies SQL types.
         if field_names.is_none() {
-            let names = field_names_of(&record);
-            fields = Some(fields_for(&names, &record));
-            field_names = Some(names);
+            fields = Some(fields_for(&header_names, &record));
+            field_names = Some(header_names.clone());
         }
         let names = field_names.as_deref().unwrap_or(&[]);
         let attr_count = record.clone().into_iter().count();
@@ -300,11 +312,6 @@ fn geometry_type_of(geometry: &Geometry<f64>, path: &str) -> Result<GeometryType
             detail: format!("converted geometry type {other:?}"),
         }),
     }
-}
-
-/// The layer's canonical attribute order, frozen from the first record.
-fn field_names_of(record: &Record) -> Vec<String> {
-    record.clone().into_iter().map(|(name, _)| name).collect()
 }
 
 fn fields_for(names: &[String], record: &Record) -> Vec<FieldDef> {
