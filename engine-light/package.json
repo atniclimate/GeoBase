@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:desktop": "tsc --noEmit && vite build --base=./ --outDir dist-desktop",
     "preview": "vite preview",
     "verify:render": "node scripts/verify-render.mjs"
   },

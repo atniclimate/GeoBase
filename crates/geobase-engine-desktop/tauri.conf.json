@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GeoBase",
+  "version": "0.1.0",
+  "identifier": "org.atniclimate.geobase",
+  "build": {
+    "frontendDist": "../../engine-light/dist-desktop"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

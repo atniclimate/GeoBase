@@ -11,7 +11,8 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+# Bumped from 1.75 for Tauri 2 (Phase 1.0 Desktop Engine shell).
+rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/atniclimate/GeoBase"
 authors = ["Affiliated Tribes of Northwest Indians — Tribal Climate Resilience <climatechange@atnitribes.org>"]

@@ -63,8 +63,13 @@ const center: [number, number] =
 
 function terrainBase(): string {
   const bundled = `${import.meta.env.BASE_URL}tiles/terrain/`;
-  const node = params.get("node");
-  if (node === null) return bundled;
+  // ?node= param, or the injection the Tauri shell uses (query strings on
+  // app URLs are unreliable across webview platforms).
+  const node =
+    params.get("node") ??
+    (window as unknown as { __GEOBASE_NODE__?: string }).__GEOBASE_NODE__ ??
+    null;
+  if (node === null || node === undefined) return bundled;
 
   try {
     const parsed = new URL(node);

@@ -55,3 +55,4 @@ NOTES.local.md
 !/data/fixtures/
 !/data/fixtures/**
 .codex-runs/
+dist-desktop/

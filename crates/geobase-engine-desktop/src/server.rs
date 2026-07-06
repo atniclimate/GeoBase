@@ -156,14 +156,28 @@ async fn guard_localhost(req: Request, next: Next) -> Response {
 /// loopback-only by RFC 6761.
 fn is_loopback_hostport(hostport: &str) -> bool {
     let host = if let Some(rest) = hostport.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
+        // Bracketed IPv6: everything after ']' must be empty or ':digits' —
+        // trailing garbage ("[::1]evil.example") must not parse as loopback.
+        match rest.split_once(']') {
+            Some((h, tail))
+                if tail.is_empty()
+                    || (tail.strip_prefix(':').is_some_and(|p| {
+                        !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())
+                    })) =>
+            {
+                h
+            }
+            _ => return false,
+        }
     } else {
         match hostport.rsplit_once(':') {
             Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => h,
             _ => hostport,
         }
     };
-    matches!(host, "127.0.0.1" | "::1" | "localhost") || host.ends_with(".localhost")
+    // Hostnames are case-insensitive.
+    let host = host.to_ascii_lowercase();
+    matches!(host.as_str(), "127.0.0.1" | "::1" | "localhost") || host.ends_with(".localhost")
 }
 
 /// Whether an `Origin` header value is local to this machine.
@@ -702,6 +716,29 @@ mod tests {
         assert!(response.contains("\"node_id\":\"test-node\""));
 
         handle.stop().await;
+    }
+
+    #[test]
+    fn loopback_hostport_parsing_edges() {
+        for good in [
+            "127.0.0.1:8765",
+            "LOCALHOST",
+            "[::1]:80",
+            "tauri.localhost",
+            "[::1]",
+        ] {
+            assert!(is_loopback_hostport(good), "{good} should be loopback");
+        }
+        for bad in [
+            "[::1]evil.example",
+            "[::1]:evil",
+            "evil.com@127.0.0.1:80",
+            "evil.notlocalhost",
+            "127.0.0.1.evil.example",
+            "localhost.evil.example",
+        ] {
+            assert!(!is_loopback_hostport(bad), "{bad} must be rejected");
+        }
     }
 
     #[tokio::test]

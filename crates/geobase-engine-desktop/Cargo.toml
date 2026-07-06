@@ -21,9 +21,20 @@ toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 geozero = { version = "0.14.0", default-features = false, features = ["with-wkb", "with-geojson"] }
+tauri = { version = "2", optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
 
-# NOTE: Tauri (desktop shell) and axum (local tile/federation server) are added
-# in roadmap Phase 1.0. Kept out of the scaffold to keep the initial build light.
+[features]
+# The Tauri desktop shell is feature-gated so `cargo build --workspace`
+# stays lean everywhere (ubuntu CI needs no GTK/webkit packages); the shell
+# builds explicitly with `--features shell`.
+shell = ["dep:tauri"]
+
+[[bin]]
+name = "geobase-desktop"
+required-features = ["shell"]
+
+[build-dependencies]
+tauri-build = "2"
