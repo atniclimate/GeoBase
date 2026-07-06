@@ -52,3 +52,31 @@ proven continuously without GDAL entering the product.
 matrix can still be non-conformant for shapes outside it; mitigated by the
 oracle fixture set (multi-tile, partial edge tiles, interior nodata,
 non-square, UTM CRS) and revisited when Phase 2.1 widens raster inputs.
+
+## 2026-07-06 — Node server browser boundary: loopback CORS allowlist + rebinding guard
+
+**Trigger:** rung 2 (root cause of the node-mode render-gate failure was
+CORS, and the obvious patch — `Access-Control-Allow-Origin: *` — would
+have let any web page the user visits read node data through their
+browser: drive-by localhost exfiltration, egress off-node in all but
+name). **Choice:** the 127.0.0.1 bind keeps remote sockets out; a guard
+middleware keeps remote web pages out — non-loopback `Host` headers are
+refused (DNS-rebinding defense; a rebound attacker domain is same-origin
+to the victim's browser and bypasses CORS entirely), and `Origin` is
+echoed into CORS headers only for loopback origins (`localhost`,
+`*.localhost` per RFC 6761, `127.0.0.1`, `[::1]`, `tauri://localhost`);
+anything else is a flat 403. **Strongest surviving objection:** any local
+web page can still read T0/T1 — acceptable for 1.0 (they are the user's
+own local apps); per-app tokens arrive with the Phase 1.2 ceremony work.
+
+## 2026-07-06 — Desktop shell: Tauri 2, feature-gated; workspace MSRV 1.75 → 1.85
+
+**Trigger:** rung 1–2 (Phase 1.0 build decision). Tauri 2 requires a
+newer MSRV than the workspace's 1.75 (cargo silently resolved Tauri 1.8
+under the old pin — caught, corrected, pinned to `tauri = "2"`).
+**Choice:** bump workspace `rust-version` to 1.85; gate the shell behind
+`--features shell` with a `required-features` binary so `cargo build
+--workspace` stays webkit/GTK-free on CI and on lean machines — the
+desktop shell is built deliberately, not incidentally. The shell binary
+injects the node URL via initialization script rather than app-URL query
+strings (webview-platform-dependent behavior).

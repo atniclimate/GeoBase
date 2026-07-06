@@ -45,17 +45,35 @@ assertion in `engine-light/scripts/verify-render.mjs` (run locally pre-push and
 by the `Render Gate` workflow); the committed PNG is the one-time human-endorsed
 capture, never byte-compared.
 
-### 0.3 — Ingestor (GeoPack) MVP
+### 0.3 — Ingestor (GeoPack) MVP  *(complete — gate met in CI)*
 First real work for `geobase-ingestor`. Take a shapefile and a GeoTIFF, package
 them into a **GeoPack** — a secure GeoPackage bundle carrying TSDF tier +
 framework version + an audit record. Unclassified inputs default to T3.
 Round-trip verified by re-opening in the engine. (Phase 0.2's
 `scripts/make_t0_baseline.py` is the working sketch this formalizes in Rust.)
 
-### 1.0 — Desktop Engine core
+**Gate:** `scripts/geopack_gate.py`, run continuously by the `GeoPack Gate`
+workflow — a T0-classified fixture pack passes the GDAL cross-implementation
+oracle value-for-value and flows through the engine tile path; the same
+fixtures ingested unclassified default to **T3 and are refused** by the
+public tile emitter. Enforcement observed, both directions. Implementation
+is pure Rust (no GDAL in the product; see `docs/DECISIONS.md`, 2026-07-06).
+
+### 1.0 — Desktop Engine core  *(complete — gate met)*
 `geobase-engine-desktop` gains its Tauri shell and an `axum` local server that
 serves tiles/data to the embedded MapLibre view. The node loads `place.toml` and
 is "grounded." This is where GeoBase becomes a real local node, not just libraries.
+
+**Gate artifact:** [`docs/verification/phase-1.0-desktop-node.png`](verification/phase-1.0-desktop-node.png)
+— the Tauri shell rendering the T0 baseline in its embedded MapLibre, tiles
+served by the grounded node over `127.0.0.1` (webview keep-alive connections
+to the node verified at capture time). Ongoing enforcement: the
+`node-render-gate` CI job drives the Phase 0.2 pixel-diff harness through a
+booted node (`NODE_URL`), proving node-served displacement continuously.
+The server ships the egress stance: loopback-only bind (not configurable),
+DNS-rebinding + CORS loopback guard, T2/T3 feature serving refused until the
+Phase 1.2 ceremony exists. Desktop shell is feature-gated (`--features
+shell`) so workspace CI stays webkit-free.
 
 ### 1.1 — Layer packages
 Generalize import so GeoPackages/shapefiles register as stackable layer packages
