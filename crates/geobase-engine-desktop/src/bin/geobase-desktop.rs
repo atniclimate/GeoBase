@@ -70,8 +70,17 @@ fn main() {
     // The server lives on its own runtime; both stay alive for the whole
     // app lifetime (dropping the handle would trigger graceful shutdown).
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let handle = match runtime.block_on(serve(Arc::new(node), ServerConfig { port: 0, tiles_dir }))
-    {
+    // Export capability is opted into deliberately (GEOBASE_EXPORTS), never
+    // default-on.
+    let exports_dir = env_path("GEOBASE_EXPORTS");
+    let handle = match runtime.block_on(serve(
+        Arc::new(node),
+        ServerConfig {
+            port: 0,
+            tiles_dir,
+            exports_dir,
+        },
+    )) {
         Ok(handle) => handle,
         Err(err) => {
             eprintln!("[geobase-desktop] server failed to start: {err}");

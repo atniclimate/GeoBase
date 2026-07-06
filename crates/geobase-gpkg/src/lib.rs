@@ -18,6 +18,10 @@ pub mod ceremony;
 pub mod raster;
 pub mod vector;
 
+// `GeoPackage::conn()` hands out rusqlite types; re-export the crate so
+// downstream users can name them without a version-pinned direct dep.
+pub use rusqlite;
+
 use std::path::{Path, PathBuf};
 
 use geobase_tsdf::Tier;

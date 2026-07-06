@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! cargo run -p geobase-engine-desktop --example node -- \
-//!     <place.toml> <vault-dir> [tiles-dir] [port]
+//!     <place.toml> <vault-dir> [tiles-dir] [port] [exports-dir]
 //! ```
 //!
 //! Prints `NODE-READY <addr>` once serving; Ctrl-C to stop.
@@ -18,11 +18,12 @@ use geobase_engine_desktop::Node;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let (Some(place), Some(vault)) = (args.next(), args.next()) else {
-        eprintln!("usage: node <place.toml> <vault-dir> [tiles-dir] [port]");
+        eprintln!("usage: node <place.toml> <vault-dir> [tiles-dir] [port] [exports-dir]");
         std::process::exit(2);
     };
     let tiles_dir = args.next().map(PathBuf::from);
     let port: u16 = args.next().map(|p| p.parse()).transpose()?.unwrap_or(0);
+    let exports_dir = args.next().map(PathBuf::from);
 
     let node = Node::boot(
         PathBuf::from(place).as_path(),
@@ -36,7 +37,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.tsdf_version,
         node.tsdf_origin,
     );
-    let handle = serve(Arc::new(node), ServerConfig { port, tiles_dir }).await?;
+    let handle = serve(
+        Arc::new(node),
+        ServerConfig {
+            port,
+            tiles_dir,
+            exports_dir,
+        },
+    )
+    .await?;
     println!("NODE-READY http://{}", handle.addr);
 
     tokio::signal::ctrl_c().await?;

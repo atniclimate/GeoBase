@@ -10,6 +10,7 @@
 //! ([`vault`]), localhost-only server ([`server`]). The Tauri shell that
 //! embeds the Light Engine front-end arrives in wave 2.
 
+pub mod export;
 pub mod place;
 pub mod server;
 pub mod vault;

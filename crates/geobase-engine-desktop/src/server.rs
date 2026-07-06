@@ -28,6 +28,10 @@
 //!   FeatureCollection (geometry via `geozero` GPKG-WKB → GeoJSON;
 //!   attributes as properties; `id` from the feature rowid). 404 unknown
 //!   pack/table; 403 tier-refused; 400 non-feature table.
+//! - `POST /api/export` → the first mutating endpoint (Phase 1.3b):
+//!   painted polygons in, T2-stamped shapefile product out, through the
+//!   CeremonyGate seam and the zero-source-disclosure verifier. Full
+//!   contract in the `export` module docs. 503 without an exports dir.
 //! - `GET /tiles/terrain/…` → static files from `tiles_dir`
 //!   (`tower-http` ServeDir); 404 when `tiles_dir` is `None`.
 //!
@@ -59,6 +63,10 @@ pub struct ServerConfig {
     pub port: u16,
     /// Pre-derived T0 tile pyramid directory (optional until wave 2 wiring).
     pub tiles_dir: Option<PathBuf>,
+    /// Where exported products (and the export ledger) land. `None`
+    /// refuses `POST /api/export` with 503 — exporting is opted into
+    /// deliberately, never a default-on capability.
+    pub exports_dir: Option<PathBuf>,
 }
 
 /// A running server: bound address plus graceful shutdown.
@@ -86,11 +94,22 @@ pub enum ServerError {
 #[derive(Clone)]
 struct ServerState {
     node: Arc<Node>,
+    /// The export-authorization seam (Phase 1.2 swaps the implementation).
+    gate: Arc<dyn geobase_gpkg::ceremony::CeremonyGate + Send + Sync>,
+    /// `None` refuses `POST /api/export` — exporting is deliberate.
+    exports_dir: Option<PathBuf>,
 }
 
 /// Build the router for `node` (pure; unit-testable via tower `oneshot`).
 pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
-    let state = ServerState { node };
+    let state = ServerState {
+        node,
+        // The Phase 1.2 swap point (docs/CEREMONY-GATE.md): the sovereign
+        // CeremonyGate implementation replaces the provisional one HERE,
+        // nowhere else.
+        gate: Arc::new(geobase_gpkg::ceremony::ProvisionalDevGate),
+        exports_dir: config.exports_dir.clone(),
+    };
     let mut router = axum::Router::new()
         .route("/api/node", get(api_node))
         .route("/api/packs", get(api_packs))
@@ -99,6 +118,7 @@ pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
             "/api/packs/{id}/tables/{table}/features",
             get(api_pack_table_features),
         )
+        .route("/api/export", axum::routing::post(api_export))
         .with_state(state);
 
     router = match &config.tiles_dir {
@@ -147,7 +167,24 @@ async fn guard_localhost(req: Request, next: Next) -> Response {
             );
         }
     }
-    let mut response = next.run(req).await;
+    // CORS preflight: a browser JSON POST (RStep export) sends OPTIONS
+    // first. Answer it HERE for loopback origins only — no route ever
+    // sees an OPTIONS request, and foreign origins were already refused
+    // above.
+    let mut response = if req.method() == axum::http::Method::OPTIONS && origin.is_some() {
+        let mut preflight = StatusCode::NO_CONTENT.into_response();
+        preflight.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST"),
+        );
+        preflight.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("content-type"),
+        );
+        preflight
+    } else {
+        next.run(req).await
+    };
     if let Some(o) = origin {
         response
             .headers_mut()
@@ -305,6 +342,218 @@ async fn api_pack_layers(State(state): State<ServerState>, Path(id): Path<String
             json!({"reason": err}),
             Some(tier),
         ),
+    }
+}
+
+/// `POST /api/export` request body (deny_unknown_fields: a mutating
+/// endpoint never guesses what a stray field meant).
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportBody {
+    product: String,
+    source_packs: Vec<String>,
+    requester: String,
+    #[serde(default)]
+    purpose: Option<String>,
+    features: Vec<ExportBodyFeature>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportBodyFeature {
+    geometry: Value,
+    score: f64,
+}
+
+/// The first mutating endpoint. Contract in `export.rs` module docs:
+/// loopback-guarded like everything else, 503 without an exports dir,
+/// 404 unknown source pack, 403 on ceremony refusal (the seam enforces
+/// the T3 floor), 400 invalid, 409 exists; success is T2-stamped and
+/// fully audited before the response returns.
+async fn api_export(
+    State(state): State<ServerState>,
+    body: axum::extract::Json<Value>,
+) -> Response {
+    use crate::export::{export_product, ExportError, ExportRequest, PaintedFeature, SourcePack};
+
+    let Some(exports_dir) = state.exports_dir.clone() else {
+        return status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"reason": "exports_dir is not configured for this node"}),
+            None,
+        );
+    };
+    let parsed: ExportBody = match serde_json::from_value(body.0) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return status_json(
+                StatusCode::BAD_REQUEST,
+                json!({"reason": format!("invalid export request: {err}")}),
+                None,
+            );
+        }
+    };
+
+    // Resolve every source pack from the catalog BEFORE anything else.
+    let mut sources = Vec::with_capacity(parsed.source_packs.len());
+    for pack_id in &parsed.source_packs {
+        let Some(entry) = state.node.catalog.iter().find(|entry| &entry.id == pack_id) else {
+            return status_json(
+                StatusCode::NOT_FOUND,
+                json!({"reason": format!("unknown source pack '{pack_id}'")}),
+                None,
+            );
+        };
+        sources.push(SourcePack {
+            id: entry.id.clone(),
+            path: entry.path.clone(),
+            tier: entry.tier,
+        });
+    }
+
+    let mut features = Vec::with_capacity(parsed.features.len());
+    for (index, feature) in parsed.features.iter().enumerate() {
+        match painted_geometry_from_geojson(&feature.geometry) {
+            Ok(geometry) => features.push(PaintedFeature {
+                geometry,
+                score: feature.score,
+            }),
+            Err(detail) => {
+                return status_json(
+                    StatusCode::BAD_REQUEST,
+                    json!({"reason": format!("feature {index}: {detail}")}),
+                    None,
+                );
+            }
+        }
+    }
+
+    let request = ExportRequest {
+        product: parsed.product,
+        source_packs: parsed.source_packs,
+        requester: parsed.requester,
+        purpose: parsed.purpose,
+        features,
+    };
+    let gate = state.gate.clone();
+    // File IO + SQLite are blocking; keep the runtime responsive.
+    let outcome = tokio::task::spawn_blocking(move || {
+        export_product(gate.as_ref(), &exports_dir, &request, &sources)
+    })
+    .await;
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(join_err) => {
+            return status_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"reason": format!("export task failed: {join_err}")}),
+                None,
+            );
+        }
+    };
+    match outcome {
+        Ok(done) => {
+            let files: serde_json::Map<String, Value> = done
+                .files
+                .iter()
+                .map(|(name, sha256)| {
+                    // Frozen contract key for the sidecar is "tsdf_json"
+                    // (Path::extension would say just "json").
+                    let key = if name.ends_with(".tsdf.json") {
+                        "tsdf_json".to_string()
+                    } else {
+                        std::path::Path::new(name)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("file")
+                            .to_string()
+                    };
+                    (key, json!({"name": name, "sha256": sha256}))
+                })
+                .collect();
+            status_json(
+                StatusCode::OK,
+                json!({
+                    "product": done.product,
+                    "tier": done.tier.code(),
+                    "features": done.features_written,
+                    "files": files,
+                    "area_m2_total": done.area_m2_total,
+                    "ceremony": {
+                        "process": done.ceremony.process,
+                        "basis": done.ceremony.basis,
+                    },
+                    "audit_ids": done.audit_ids,
+                }),
+                Some(done.tier),
+            )
+        }
+        Err(err) => {
+            let status = match &err {
+                ExportError::Refused(_) => StatusCode::FORBIDDEN,
+                ExportError::Invalid(_) => StatusCode::BAD_REQUEST,
+                ExportError::Exists(_) => StatusCode::CONFLICT,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            status_json(status, json!({"reason": err.to_string()}), None)
+        }
+    }
+}
+
+/// Parse a GeoJSON Polygon/MultiPolygon object into painted geometry.
+/// Structural parsing only — ring validity (closure, >= 3 distinct
+/// vertices, finiteness) is the export pipeline's job, where failures
+/// name the feature.
+fn painted_geometry_from_geojson(value: &Value) -> Result<crate::export::PaintedGeometry, String> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or("geometry missing 'type'")?;
+    let coordinates = value
+        .get("coordinates")
+        .ok_or("geometry missing 'coordinates'")?;
+    let ring = |raw: &Value| -> Result<geo_types::LineString<f64>, String> {
+        let positions = raw.as_array().ok_or("ring is not an array")?;
+        let mut coords = Vec::with_capacity(positions.len());
+        for position in positions {
+            let pair = position.as_array().ok_or("position is not an array")?;
+            let (Some(x), Some(y)) = (
+                pair.first().and_then(Value::as_f64),
+                pair.get(1).and_then(Value::as_f64),
+            ) else {
+                return Err("position is not [lon, lat] numbers".into());
+            };
+            coords.push(geo_types::Coord { x, y });
+        }
+        Ok(geo_types::LineString::from(coords))
+    };
+    let polygon = |raw: &Value| -> Result<geo_types::Polygon<f64>, String> {
+        let rings = raw
+            .as_array()
+            .ok_or("polygon coordinates are not an array")?;
+        let mut iter = rings.iter();
+        let exterior = ring(iter.next().ok_or("polygon has no exterior ring")?)?;
+        let interiors = iter.map(ring).collect::<Result<Vec<_>, _>>()?;
+        Ok(geo_types::Polygon::new(exterior, interiors))
+    };
+    match kind {
+        "Polygon" => Ok(crate::export::PaintedGeometry::Polygon(polygon(
+            coordinates,
+        )?)),
+        "MultiPolygon" => {
+            let polys = coordinates
+                .as_array()
+                .ok_or("multipolygon coordinates are not an array")?
+                .iter()
+                .map(polygon)
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(crate::export::PaintedGeometry::MultiPolygon(
+                geo_types::MultiPolygon(polys),
+            ))
+        }
+        other => Err(format!(
+            "geometry type '{other}' is not Polygon or MultiPolygon"
+        )),
     }
 }
 
@@ -1098,6 +1347,164 @@ mod tests {
         ] {
             assert!(!is_loopback_hostport(bad), "{bad} must be rejected");
         }
+    }
+
+    #[tokio::test]
+    async fn export_route_refuses_without_exports_dir() {
+        let app = router(test_node(Vec::new()), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_response(response).await;
+        assert_eq!(
+            body["reason"],
+            "exports_dir is not configured for this node"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_route_exports_t2_product_end_to_end() {
+        // A T1 source pack with one polygon feature table.
+        let path = temp_path("export-src.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: "capacity".into(),
+                identifier: "Capacity".into(),
+                srs_epsg: 4326,
+                srs_definition: None,
+                geometry_type: "POLYGON".into(),
+                columns: Vec::new(),
+                bounds: (0.0, 0.0, 1.0, 1.0),
+            },
+        )
+        .unwrap();
+        drop(gpkg);
+        let entry = CatalogEntry {
+            id: "capacity-2026".into(),
+            path,
+            tier: Tier::T1,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![TableInfo {
+                name: "capacity".into(),
+                data_type: "features".into(),
+            }],
+        };
+        let exports_dir = temp_path("exports-route");
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports_dir.clone()),
+                ..ServerConfig::default()
+            },
+        );
+        let body = json!({
+            "product": "route-site",
+            "source_packs": ["capacity-2026"],
+            "requester": "route-test",
+            "features": [{
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0.0, 0.0], [0.001, 0.0], [0.001, 0.001], [0.0, 0.001], [0.0, 0.0]]],
+                },
+                "score": 0.8,
+            }],
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-geobase-tier"], "T2");
+        let payload = json_response(response).await;
+        assert_eq!(payload["tier"], "T2");
+        assert_eq!(payload["features"], 1);
+        assert!(payload["files"]["shp"]["sha256"].is_string());
+        assert_eq!(
+            payload["files"]["tsdf_json"]["name"],
+            "route-site.tsdf.json"
+        );
+        assert_eq!(
+            payload["ceremony"]["basis"],
+            geobase_gpkg::ceremony::PROVISIONAL_BASIS
+        );
+        assert!(exports_dir.join("route-site.shp").is_file());
+        assert!(exports_dir.join("node-audit.gpkg").is_file());
+
+        // Same product name again -> 409, no overwrite through the API.
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "product": "route-site",
+                            "source_packs": ["capacity-2026"],
+                            "requester": "route-test",
+                            "features": [{
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [[[0.01, 0.0], [0.011, 0.0], [0.011, 0.001], [0.01, 0.001], [0.01, 0.0]]],
+                                },
+                                "score": 0.5,
+                            }],
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn preflight_options_answers_loopback_origins_only() {
+        let app = router(test_node(Vec::new()), &ServerConfig::default());
+        let request = axum::http::Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/api/export")
+            .header(header::HOST, "127.0.0.1:8765")
+            .header(header::ORIGIN, "http://localhost:4173")
+            .body(Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app.clone(), request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "http://localhost:4173"
+        );
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_METHODS],
+            "GET, POST"
+        );
+
+        let foreign = axum::http::Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/api/export")
+            .header(header::HOST, "127.0.0.1:8765")
+            .header(header::ORIGIN, "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, foreign).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
