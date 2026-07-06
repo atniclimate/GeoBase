@@ -54,3 +54,4 @@ NOTES.local.md
 !/data/.gitkeep
 !/data/fixtures/
 !/data/fixtures/**
+.codex-runs/
