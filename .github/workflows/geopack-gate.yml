@@ -28,7 +28,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: scripts/oracle-requirements.txt
       - name: Install oracle stack (GDAL via wheels — oracle only, never product)
-        run: pip install numpy rasterio pyogrio pillow
+        run: pip install -r scripts/oracle-requirements.txt
       - name: Run gate
         run: python scripts/geopack_gate.py

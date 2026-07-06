@@ -1,0 +1,7 @@
+# CI oracle stack — pinned so the conformance oracle cannot drift
+# independently of the code it verifies (review advisory, 2026-07-06).
+# These match the versions the gate was proven against locally.
+numpy==2.4.4
+rasterio==1.5.0
+pyogrio==0.12.1
+pillow==12.2.0
