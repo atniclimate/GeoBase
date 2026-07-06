@@ -2,6 +2,8 @@ import maplibregl from "maplibre-gl";
 import type { RasterDEMSourceSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./style.css";
+import { initLayerPanel } from "./layers";
+import type { LayersHandle } from "./layers";
 
 /**
  * GeoBase Light Engine — Phase 0.2: true 3D terrain from a LOCAL raster-dem
@@ -61,22 +63,22 @@ const center: [number, number] =
     ? [centerParam[0], centerParam[1]]
     : [-123.13, 47.14]; // pinned gate camera: high-relief upland (peak 374.9 m)
 
-function terrainBase(): string {
-  const bundled = `${import.meta.env.BASE_URL}tiles/terrain/`;
+/** The validated loopback node base URL (no trailing slash), or null when
+ *  running from the bundled T0 terrain (no node configured/accepted). */
+function nodeBase(): string | null {
   // ?node= param, or the injection the Tauri shell uses (query strings on
   // app URLs are unreliable across webview platforms).
   const node =
     params.get("node") ??
     (window as unknown as { __GEOBASE_NODE__?: string }).__GEOBASE_NODE__ ??
     null;
-  if (node === null || node === undefined) return bundled;
+  if (node === null || node === undefined) return null;
 
   try {
     const parsed = new URL(node);
     const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
     if ((parsed.protocol === "http:" || parsed.protocol === "https:") && loopback) {
-      const base = parsed.href.replace(/\/$/, "");
-      return `${base}/tiles/terrain/`;
+      return parsed.href.replace(/\/$/, "");
     }
   } catch {
     // Fall through to the loud refusal below.
@@ -86,7 +88,14 @@ function terrainBase(): string {
   console.error(
     `[GeoBase] rejected node source '${node}' — node must be an http(s) URL on localhost/127.0.0.1; falling back to bundled terrain.`,
   );
-  return bundled;
+  return null;
+}
+
+const activeNode = nodeBase();
+
+function terrainBase(): string {
+  const bundled = `${import.meta.env.BASE_URL}tiles/terrain/`;
+  return activeNode === null ? bundled : `${activeNode}/tiles/terrain/`;
 }
 
 const map = new maplibregl.Map({
@@ -169,10 +178,23 @@ const ready: Promise<void> = new Promise((resolve, reject) => {
 
 declare global {
   interface Window {
-    __geobase: { map: maplibregl.Map; ready: Promise<void> };
+    __geobase: {
+      map: maplibregl.Map;
+      ready: Promise<void>;
+      /** Present in node mode only (Phase 1.1c layer panel). */
+      layers?: LayersHandle;
+    };
   }
 }
 window.__geobase = { map, ready };
+
+// Layer panel is a node-mode feature: without a node there is no catalog.
+if (activeNode !== null) {
+  const node = activeNode;
+  void ready.then(() => {
+    window.__geobase.layers = initLayerPanel(map, node);
+  });
+}
 
 void ready.catch((err: unknown) => {
   // eslint-disable-next-line no-console
