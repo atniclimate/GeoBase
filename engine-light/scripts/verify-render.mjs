@@ -75,7 +75,8 @@ console.log(`[carve-out] tile bundle ${(tileBytes / 1048576).toFixed(2)} MB, con
 const server = await preview({ root: PKG_ROOT });
 const baseUrl = server.resolvedUrls?.local[0];
 if (!baseUrl) fail("vite preview did not resolve a local URL (is dist/ built?)");
-const url = `${baseUrl}?${CAMERA}`;
+const nodeParam = process.env.NODE_URL ? `&node=${encodeURIComponent(process.env.NODE_URL)}` : "";
+const url = `${baseUrl}?${CAMERA}${nodeParam}`;
 console.log(`[preview] ${url}`);
 
 mkdirSync(OUT_DIR, { recursive: true });

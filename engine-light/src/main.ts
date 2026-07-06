@@ -61,6 +61,29 @@ const center: [number, number] =
     ? [centerParam[0], centerParam[1]]
     : [-123.13, 47.14]; // pinned gate camera: high-relief upland (peak 374.9 m)
 
+function terrainBase(): string {
+  const bundled = `${import.meta.env.BASE_URL}tiles/terrain/`;
+  const node = params.get("node");
+  if (node === null) return bundled;
+
+  try {
+    const parsed = new URL(node);
+    const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    if ((parsed.protocol === "http:" || parsed.protocol === "https:") && loopback) {
+      const base = parsed.href.replace(/\/$/, "");
+      return `${base}/tiles/terrain/`;
+    }
+  } catch {
+    // Fall through to the loud refusal below.
+  }
+
+  // eslint-disable-next-line no-console
+  console.error(
+    `[GeoBase] rejected node source '${node}' — node must be an http(s) URL on localhost/127.0.0.1; falling back to bundled terrain.`,
+  );
+  return bundled;
+}
+
 const map = new maplibregl.Map({
   container: "map",
   style: {
@@ -87,7 +110,7 @@ async function enableTerrain(): Promise<void> {
   // Manifest and tile URLs are built by string concatenation ONLY. `new URL()`
   // percent-encodes {z}/{x}/{y} placeholders, which MapLibre's literal
   // substitution never matches — a silent all-404 failure mode.
-  const base = `${import.meta.env.BASE_URL}tiles/terrain/`;
+  const base = terrainBase();
   const response = await fetch(`${base}geobase-baseline.json`);
   if (!response.ok) throw new Error(`baseline manifest fetch failed: ${response.status}`);
   const manifest = (await response.json()) as BaselineManifest;

@@ -34,8 +34,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use geobase_gpkg::GeoPackage;
@@ -100,7 +101,80 @@ pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
             .route("/tiles/terrain/{*path}", get(no_terrain_tiles)),
     };
 
-    router
+    router.layer(middleware::from_fn(guard_localhost))
+}
+
+/// Loopback guard on every route — the browser-facing half of the egress
+/// stance. The 127.0.0.1 bind keeps remote *sockets* out; this keeps
+/// remote *web pages* out:
+///
+/// - **DNS-rebinding defense**: a `Host` header that is not a loopback
+///   name is refused (a rebound attacker domain resolves here with its
+///   own hostname and would otherwise be treated as same-origin by the
+///   victim's browser, bypassing CORS entirely).
+/// - **CORS allowlist, not `*`**: a present `Origin` is echoed into
+///   `access-control-allow-origin` only when it is itself loopback
+///   (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`, or
+///   `tauri://localhost` — the embedded shell). Any other origin gets a
+///   flat 403: a random website must not read even T0 through the
+///   user's browser — that would be egress off-node in all but name.
+async fn guard_localhost(req: Request, next: Next) -> Response {
+    if let Some(host) = req.headers().get(header::HOST) {
+        let ok = host.to_str().is_ok_and(is_loopback_hostport);
+        if !ok {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                json!({"reason": "host header is not a loopback name (node serves this machine only)"}),
+                None,
+            );
+        }
+    }
+    let origin = req.headers().get(header::ORIGIN).cloned();
+    if let Some(o) = &origin {
+        let ok = o.to_str().is_ok_and(is_loopback_origin);
+        if !ok {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                json!({"reason": "origin is not local to this machine (node serves this machine only)"}),
+                None,
+            );
+        }
+    }
+    let mut response = next.run(req).await;
+    if let Some(o) = origin {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, o);
+        response
+            .headers_mut()
+            .append(header::VARY, HeaderValue::from_static("origin"));
+    }
+    response
+}
+
+/// Whether a `host[:port]` names loopback. `.localhost` names are
+/// loopback-only by RFC 6761.
+fn is_loopback_hostport(hostport: &str) -> bool {
+    let host = if let Some(rest) = hostport.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        match hostport.rsplit_once(':') {
+            Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => h,
+            _ => hostport,
+        }
+    };
+    matches!(host, "127.0.0.1" | "::1" | "localhost") || host.ends_with(".localhost")
+}
+
+/// Whether an `Origin` header value is local to this machine.
+fn is_loopback_origin(origin: &str) -> bool {
+    if origin == "tauri://localhost" {
+        return true;
+    }
+    origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .is_some_and(is_loopback_hostport)
 }
 
 /// Bind 127.0.0.1 (never anything else) and serve until `stop()`.
@@ -628,6 +702,57 @@ mod tests {
         assert!(response.contains("\"node_id\":\"test-node\""));
 
         handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn guard_refuses_non_loopback_host_and_origin() {
+        let app = router(test_node(Vec::new()), &ServerConfig::default());
+        let rebind = axum::http::Request::builder()
+            .uri("/api/node")
+            .header(header::HOST, "evil.example:8765")
+            .body(Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app.clone(), rebind)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let foreign = axum::http::Request::builder()
+            .uri("/api/node")
+            .header(header::HOST, "127.0.0.1:8765")
+            .header(header::ORIGIN, "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        let response = tower::ServiceExt::oneshot(app, foreign).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn guard_echoes_loopback_origins_only() {
+        for origin in [
+            "http://localhost:4174",
+            "http://127.0.0.1:5173",
+            "http://tauri.localhost",
+            "tauri://localhost",
+        ] {
+            let app = router(test_node(Vec::new()), &ServerConfig::default());
+            let request = axum::http::Request::builder()
+                .uri("/api/node")
+                .header(header::HOST, "localhost:8765")
+                .header(header::ORIGIN, origin)
+                .body(Body::empty())
+                .unwrap();
+            let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "origin {origin}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .and_then(|v| v.to_str().ok()),
+                Some(origin),
+                "ACAO must echo {origin}"
+            );
+        }
     }
 
     fn gpkg_point_blob(x: f64, y: f64) -> Vec<u8> {
