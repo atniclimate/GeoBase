@@ -9,11 +9,21 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-geobase-core = { workspace = true }
+geobase-core.workspace = true
 geobase-tsdf = { workspace = true }
-geobase-gpkg = { workspace = true }
+geobase-gpkg.workspace = true
 geobase-ingestor = { workspace = true }
 thiserror = { workspace = true }
+axum = "0.8.4"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tower-http = { version = "0.7.0", features = ["fs"] }
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+geozero = { version = "0.14.0", default-features = false, features = ["with-wkb", "with-geojson"] }
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }
 
 # NOTE: Tauri (desktop shell) and axum (local tile/federation server) are added
 # in roadmap Phase 1.0. Kept out of the scaffold to keep the initial build light.
