@@ -19,6 +19,11 @@
 //!   pack_count }`
 //! - `GET /api/packs` → catalog as JSON (id, tier code, tagged,
 //!   tsdf_version, tables)
+//! - `GET /api/packs/{id}/layers` → vector layer metadata for feature
+//!   tables only, in catalog order. Raster coverage tables are excluded
+//!   from Phase 1.1 layer overlays. Bounds are read from `gpkg_contents`
+//!   in the layer's native CRS; `color_seed` is the big-endian first four
+//!   bytes of `SHA-256("{pack_id}/{table}")`.
 //! - `GET /api/packs/{id}/tables/{table}/features` → RFC 7946
 //!   FeatureCollection (geometry via `geozero` GPKG-WKB → GeoJSON;
 //!   attributes as properties; `id` from the feature rowid). 404 unknown
@@ -31,7 +36,7 @@
 //! it does not hoard).
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Path, Request, State};
@@ -42,6 +47,7 @@ use axum::routing::get;
 use geobase_gpkg::GeoPackage;
 use geobase_tsdf::Tier;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 
@@ -88,6 +94,7 @@ pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
     let mut router = axum::Router::new()
         .route("/api/node", get(api_node))
         .route("/api/packs", get(api_packs))
+        .route("/api/packs/{id}/layers", get(api_pack_layers))
         .route(
             "/api/packs/{id}/tables/{table}/features",
             get(api_pack_table_features),
@@ -262,6 +269,45 @@ async fn no_terrain_tiles() -> impl IntoResponse {
     )
 }
 
+async fn api_pack_layers(State(state): State<ServerState>, Path(id): Path<String>) -> Response {
+    let Some(entry) = state.node.catalog.iter().find(|entry| entry.id == id) else {
+        return status_json(
+            StatusCode::NOT_FOUND,
+            json!({"reason": "unknown pack"}),
+            None,
+        );
+    };
+
+    let tier = entry.tier;
+    if !matches!(tier, Tier::T0 | Tier::T1) {
+        return status_json(
+            StatusCode::FORBIDDEN,
+            json!({
+                "tier": tier.code(),
+                "reason": "requires the Phase 1.2 permissions ceremony",
+            }),
+            Some(tier),
+        );
+    }
+
+    match layer_metadata(&entry.path, &entry.id, tier, &entry.tables) {
+        Ok(layers) => status_json(
+            StatusCode::OK,
+            json!({
+                "pack": entry.id,
+                "tier": tier.code(),
+                "layers": layers,
+            }),
+            Some(tier),
+        ),
+        Err(err) => status_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"reason": err}),
+            Some(tier),
+        ),
+    }
+}
+
 async fn api_pack_table_features(
     State(state): State<ServerState>,
     Path((id, table)): Path<(String, String)>,
@@ -315,6 +361,86 @@ async fn api_pack_table_features(
             Some(tier),
         ),
     }
+}
+
+fn layer_metadata(
+    path: &FsPath,
+    pack_id: &str,
+    pack_tier: Tier,
+    tables: &[crate::vault::TableInfo],
+) -> Result<Vec<Value>, String> {
+    let gpkg = GeoPackage::open(path).map_err(|err| err.to_string())?;
+    let tags = gpkg.read_tsdf_tags().map_err(|err| err.to_string())?;
+    let mut layers = Vec::new();
+    for table in tables.iter().filter(|table| table.data_type == "features") {
+        let table_tier = tags
+            .iter()
+            .filter(|tag| tag.scope == "table" && tag.table.as_deref() == Some(table.name.as_str()))
+            .map(|tag| tag.tier)
+            .max()
+            .unwrap_or(pack_tier);
+        let info = gpkg_layer_info(&gpkg, &table.name)?;
+        layers.push(json!({
+            "table": table.name,
+            "geometry_type": info.geometry_type,
+            "bounds": info.bounds,
+            "srs": info.srs,
+            "tier": table_tier.code(),
+            "color_seed": layer_color_seed(pack_id, &table.name),
+        }));
+    }
+    Ok(layers)
+}
+
+struct GpkgLayerInfo {
+    geometry_type: String,
+    bounds: Value,
+    srs: Value,
+}
+
+fn gpkg_layer_info(gpkg: &GeoPackage, table: &str) -> Result<GpkgLayerInfo, String> {
+    let (geometry_type, min_x, min_y, max_x, max_y, srs_id) = gpkg
+        .conn()
+        .query_row(
+            "SELECT g.geometry_type_name, c.min_x, c.min_y, c.max_x, c.max_y, c.srs_id \
+             FROM gpkg_contents c \
+             JOIN gpkg_geometry_columns g ON g.table_name = c.table_name \
+             WHERE c.table_name = ?1",
+            [table],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<f64>>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            },
+        )
+        .map_err(|err| err.to_string())?;
+
+    let bounds = match (min_x, min_y, max_x, max_y) {
+        (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) => {
+            json!([min_x, min_y, max_x, max_y])
+        }
+        _ => Value::Null,
+    };
+    let srs = match srs_id {
+        Some(srs_id) if srs_id > 0 => json!(format!("EPSG:{srs_id}")),
+        _ => Value::Null,
+    };
+
+    Ok(GpkgLayerInfo {
+        geometry_type,
+        bounds,
+        srs,
+    })
+}
+
+fn layer_color_seed(pack_id: &str, table: &str) -> u32 {
+    let digest = Sha256::digest(format!("{pack_id}/{table}"));
+    u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]])
 }
 
 fn feature_collection(path: PathBuf, table: &str) -> Result<Value, String> {
@@ -613,6 +739,239 @@ mod tests {
         assert_eq!(body["features"][0]["properties"]["name"], "alpha");
         assert_eq!(body["features"][0]["properties"]["count"], 7);
         assert_eq!(body["features"][0]["properties"]["score"], 2.5);
+    }
+
+    #[tokio::test]
+    async fn layers_endpoint_lists_t0_feature_layers_and_skips_rasters() {
+        let path = temp_path("features.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: "places".into(),
+                identifier: "Places".into(),
+                srs_epsg: 4326,
+                srs_definition: None,
+                geometry_type: "POINT".into(),
+                columns: Vec::new(),
+                bounds: (-123.5, 48.5, -123.5, 48.5),
+            },
+        )
+        .unwrap();
+        drop(gpkg);
+
+        let entry = CatalogEntry {
+            id: "features".into(),
+            path,
+            tier: Tier::T0,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![
+                TableInfo {
+                    name: "places".into(),
+                    data_type: "features".into(),
+                },
+                TableInfo {
+                    name: "terrain".into(),
+                    data_type: "2d-gridded-coverage".into(),
+                },
+            ],
+        };
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get("/api/packs/features/layers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_response(response).await;
+        assert_eq!(body["pack"], "features");
+        assert_eq!(body["tier"], "T0");
+        assert_eq!(body["layers"].as_array().unwrap().len(), 1);
+        let layer = &body["layers"][0];
+        assert_eq!(layer["table"], "places");
+        assert_eq!(layer["geometry_type"], "POINT");
+        assert_eq!(layer["bounds"], json!([-123.5, 48.5, -123.5, 48.5]));
+        assert_eq!(layer["srs"], "EPSG:4326");
+        assert_eq!(layer["tier"], "T0");
+        let digest = Sha256::digest("features/places");
+        let expected_seed = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
+        assert_eq!(expected_seed, 56_627_218);
+        assert_eq!(layer_color_seed("features", "places"), expected_seed);
+        assert_eq!(
+            layer_color_seed("landcover-2026", "landcover"),
+            3_385_947_637
+        );
+        assert_eq!(layer["color_seed"], expected_seed);
+    }
+
+    #[tokio::test]
+    async fn layers_endpoint_honors_table_scope_tsdf_tag_tier() {
+        let path = temp_path("tiered-layers.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: "places".into(),
+                identifier: "Places".into(),
+                srs_epsg: 4326,
+                srs_definition: None,
+                geometry_type: "POINT".into(),
+                columns: Vec::new(),
+                bounds: (-123.5, 48.5, -123.5, 48.5),
+            },
+        )
+        .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T1,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
+        .unwrap();
+        let mut extras = Map::new();
+        extras.insert(
+            "classification_basis".into(),
+            Value::String("test table override".into()),
+        );
+        extras.insert(
+            "source".into(),
+            json!({"file": "synthetic", "sha256": "abc123"}),
+        );
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: Some("places".into()),
+            tier: Tier::T0,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras,
+        })
+        .unwrap();
+        drop(gpkg);
+
+        let entry = CatalogEntry {
+            id: "tiered-layers".into(),
+            path,
+            tier: Tier::T1,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![TableInfo {
+                name: "places".into(),
+                data_type: "features".into(),
+            }],
+        };
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get("/api/packs/tiered-layers/layers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_response(response).await;
+        assert_eq!(body["tier"], "T1");
+        assert_eq!(body["layers"][0]["tier"], "T0");
+    }
+
+    #[tokio::test]
+    async fn layers_endpoint_returns_404_for_unknown_pack() {
+        let app = router(test_node(Vec::new()), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get("/api/packs/missing/layers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(response.headers().get("x-geobase-tier").is_none());
+        let body = json_response(response).await;
+        assert_eq!(body["reason"], "unknown pack");
+    }
+
+    #[tokio::test]
+    async fn layers_endpoint_refuses_t2_before_metadata_leaks() {
+        let mut entry = create_pack("restricted-layers.gpkg", Some(Tier::T2));
+        entry.id = "restricted-layers".into();
+        entry.tier = Tier::T2;
+        entry.tables = vec![TableInfo {
+            name: "places".into(),
+            data_type: "features".into(),
+        }];
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get("/api/packs/restricted-layers/layers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.headers()["x-geobase-tier"], "T2");
+        let body = json_response(response).await;
+        assert_eq!(body["tier"], "T2");
+        assert_eq!(
+            body["reason"],
+            "requires the Phase 1.2 permissions ceremony"
+        );
+    }
+
+    #[tokio::test]
+    async fn layers_endpoint_sets_tier_and_no_store_headers_on_200() {
+        let path = temp_path("headers-layers.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: "places".into(),
+                identifier: "Places".into(),
+                srs_epsg: 4326,
+                srs_definition: None,
+                geometry_type: "POINT".into(),
+                columns: Vec::new(),
+                bounds: (-123.5, 48.5, -123.5, 48.5),
+            },
+        )
+        .unwrap();
+        drop(gpkg);
+
+        let entry = CatalogEntry {
+            id: "headers-layers".into(),
+            path,
+            tier: Tier::T0,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![TableInfo {
+                name: "places".into(),
+                data_type: "features".into(),
+            }],
+        };
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get("/api/packs/headers-layers/layers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-geobase-tier"], "T0");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     }
 
     #[tokio::test]
