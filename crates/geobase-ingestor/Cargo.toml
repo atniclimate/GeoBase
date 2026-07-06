@@ -13,3 +13,10 @@ geobase-core = { workspace = true }
 geobase-tsdf = { workspace = true }
 geobase-gpkg = { workspace = true }
 thiserror = { workspace = true }
+tiff = "0.11.0"
+shapefile = { version = "0.9.0", features = ["geo-types"] }
+geozero = { version = "0.14.0", default-features = false, features = ["with-wkb", "with-geo"] }
+sha2 = "0.10.9"
+serde_json.workspace = true
+geo-types = "0.7.19"
+rusqlite = "0.40.1"
