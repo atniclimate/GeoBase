@@ -14,6 +14,7 @@
 //! (the Phase 0.2 sketch): artifacts written by either implementation read
 //! identically from both. `TSDF_METADATA_URI` is the discriminator.
 
+pub mod ceremony;
 pub mod raster;
 pub mod vector;
 
