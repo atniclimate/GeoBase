@@ -35,10 +35,25 @@ importers:
       '@geobase/solo-sdk':
         specifier: workspace:*
         version: link:../sdk
+      maplibre-gl:
+        specifier: ^4.7.1
+        version: 4.7.1
     devDependencies:
+      pixelmatch:
+        specifier: ^7.1.0
+        version: 7.2.0
+      playwright:
+        specifier: 1.61.1
+        version: 1.61.1
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
+      vite:
+        specifier: ^5.4.10
+        version: 5.4.21
 
   solo/sdk:
     devDependencies:
