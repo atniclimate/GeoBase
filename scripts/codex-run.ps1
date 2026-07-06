@@ -66,11 +66,24 @@ $codexArgs = @(
     '-'
 )
 
+# CreateProcess cannot start npm's .cmd/.ps1 shims directly: prefer a real
+# .exe on PATH, else run the shim through cmd.exe.
+$codexApp = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -match '\.exe$' } | Select-Object -First 1
+
 $psi = [System.Diagnostics.ProcessStartInfo]::new()
-$psi.FileName = 'codex'
+if ($codexApp) {
+    $psi.FileName = $codexApp.Source
+} else {
+    $psi.FileName = $env:ComSpec
+    $psi.ArgumentList.Add('/d')
+    $psi.ArgumentList.Add('/c')
+    $psi.ArgumentList.Add('codex')
+}
 foreach ($arg in $codexArgs) {
     $psi.ArgumentList.Add($arg)
 }
+$psi.WorkingDirectory = (Get-Location).Path
 $psi.RedirectStandardInput = $true
 $psi.RedirectStandardError = $true
 $psi.RedirectStandardOutput = $false
