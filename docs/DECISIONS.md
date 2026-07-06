@@ -80,3 +80,58 @@ under the old pin — caught, corrected, pinned to `tauri = "2"`).
 desktop shell is built deliberately, not incidentally. The shell binary
 injects the node URL via initialization script rather than app-URL query
 strings (webview-platform-dependent behavior).
+
+## 2026-07-06 — RStep paint tool: hand-rolled behind an adapter seam, not a draw library
+
+**Trigger:** rung 4 (dependency choice for the 1.3c paint interaction;
+one adversarial Codex round per the 1.1+1.3 workplan). **Options:**
+(1) maplibre-gl-draw — aging lineage, style/id-collision nuisances, big
+surface for a small need; (2) terra-draw — modern, active, MapLibre
+adapter, but a real dependency with its own layer/event model inside an
+app that already has one; (3) hand-rolled minimal polygon tool on the
+same GeoJSON source+layer machinery the layer panel uses.
+
+**Choice:** (3), amended by the adversarial round (Codex dissented
+*conditionally*; the conditions are adopted, which the director judges
+better than either unconditional path): the tool lives behind a frozen
+`PaintTool` adapter interface in the SoLO SDK from day one (terra-draw
+becomes a drop-in adapter the day editing/vertex-drag reaches the
+roadmap — the migration surface is the interface, not the app); Phase
+1.3 UX is *deliberately narrow and recorded as such* (desktop-pointer-
+first, no touch commitment, no vertex editing, no undo beyond
+remove-last-vertex); draw-time hygiene is in scope (≥3 distinct
+vertices, degenerate-ring refusal at close, remove-last-vertex on
+Backspace, dblclick-zoom suppression while drawing); ring winding is
+normalized at export. Zero new dependencies in the sovereignty-audited
+stack.
+
+**Strongest surviving objection (Codex):** a production-feeling tool
+costs 400–800 lines with affordances and event hygiene, not the ~200
+first estimated, and hand-rolled interaction state machines are where
+subtle bugs live; accepted — the paint tool is gate-driven (SDK
+injection), bounded, and behind the adapter seam, so the cost of being
+wrong is a contained swap, not a rewrite.
+
+## 2026-07-06 — Export product format: shapefile with out-of-band classification (recorded tension with §4)
+
+**Trigger:** rung 3 (1.3b review flagged that a shapefile product cannot
+carry TSDF classification in-band, and invariant §4 forbids relying on
+detachable sidecars). **Options:** (1) export GPKG-only — classification
+travels in-artifact, but the phase deliverable is explicitly a shapefile
+others can open in any GIS; (2) shapefile + compensating mechanism;
+(3) both artifacts per export. **Choice:** (2) for Phase 1.3, recorded
+here so the tension is a decision, not an accident: the shapefile format
+HAS no in-band metadata channel, so the T2 stamp travels as (a) the
+node-local T3 export ledger (`exports_dir/node-audit.gpkg` —
+`export.ceremony` + `export.t2` rows, the authoritative record), (b) the
+API response, and (c) a `.tsdf.json` sidecar (best-effort provenance for
+humans; a shapefile is already a detachable sidecar bundle by nature).
+The export verifier + RStep gate keep the product contents themselves
+safe regardless of what detaches. **Revisit:** when a phase needs
+product interchange with stronger provenance, add option (3) — a
+T2-tagged GPKG twin written in the same export transaction.
+
+**Strongest surviving objection:** a recipient of only the `.shp/.dbf`
+pair sees no classification at all; accepted for 1.3 because the product
+contains ONLY painted-derived data (verifier-enforced) and the sharing
+workflow is Phase 1.2+ governance territory.
