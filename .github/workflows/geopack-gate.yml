@@ -1,0 +1,34 @@
+name: GeoPack Gate
+
+# Phase 0.3 acceptance gate (docs/ROADMAP.md): ingest fixtures into a
+# TSDF-tagged GeoPack, verify it with the cross-implementation GDAL oracle,
+# prove the engine tile path consumes T0 and REFUSES the unclassified (T3)
+# pack. The Python geo stack runs here as the conformance oracle only —
+# it is not a product dependency (docs/DECISIONS.md, 2026-07-06).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: geopack-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Round-trip gate (ingest → oracle → engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install oracle stack (GDAL via wheels — oracle only, never product)
+        run: pip install numpy rasterio pyogrio pillow
+      - name: Run gate
+        run: python scripts/geopack_gate.py

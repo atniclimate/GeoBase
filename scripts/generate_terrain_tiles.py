@@ -108,6 +108,12 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path, help="tile output directory")
     parser.add_argument("--minzoom", type=int, default=8)
     parser.add_argument("--maxzoom", type=int, default=12)
+    parser.add_argument(
+        "--no-rust-fixture",
+        action="store_true",
+        help="skip writing the Rust test fixture copy of the manifest "
+        "(gate/CI runs on ephemeral packs must not clobber the committed fixture)",
+    )
     args = parser.parse_args()
 
     table, tag = read_tsdf_tag(args.baseline)
@@ -203,9 +209,12 @@ def main() -> int:
     # so workspace compilation never depends on the web bundle's lifecycle.
     payload = json.dumps(manifest, indent=2) + "\n"
     (args.out / "geobase-baseline.json").write_text(payload, encoding="utf-8", newline="\n")
-    RUST_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-    RUST_FIXTURE.write_text(payload, encoding="utf-8", newline="\n")
-    print(f"[manifest] {args.out / 'geobase-baseline.json'} (+ Rust fixture)")
+    if args.no_rust_fixture:
+        print(f"[manifest] {args.out / 'geobase-baseline.json'} (Rust fixture skipped)")
+    else:
+        RUST_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        RUST_FIXTURE.write_text(payload, encoding="utf-8", newline="\n")
+        print(f"[manifest] {args.out / 'geobase-baseline.json'} (+ Rust fixture)")
     return 0
 
 
