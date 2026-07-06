@@ -471,10 +471,31 @@ pub fn package(req: &PackageRequest) -> Result<PackageResult, PackageError> {
 
         drop(gpkg);
         verify_staged(&staging, &manifest, &prepared, tier)?;
-        if req.out.exists() {
-            std::fs::remove_file(&req.out).map_err(IngestError::from)?;
+        // Replace via backup-aside, never remove-then-rename: if the final
+        // rename fails, the previous artifact is restored — `out` is only
+        // ever the old complete artifact or the new verified one.
+        let backup = req.out.exists().then(|| {
+            let mut name = req
+                .out
+                .file_name()
+                .map(std::ffi::OsString::from)
+                .unwrap_or_else(|| std::ffi::OsString::from("geopack"));
+            name.push(".replaced-tmp");
+            req.out.with_file_name(name)
+        });
+        if let Some(backup) = &backup {
+            let _ = std::fs::remove_file(backup);
+            std::fs::rename(&req.out, backup).map_err(IngestError::from)?;
         }
-        std::fs::rename(&staging, &req.out).map_err(IngestError::from)?;
+        if let Err(err) = std::fs::rename(&staging, &req.out) {
+            if let Some(backup) = &backup {
+                let _ = std::fs::rename(backup, &req.out);
+            }
+            return Err(PackageError::Ingest(IngestError::from(err)));
+        }
+        if let Some(backup) = &backup {
+            let _ = std::fs::remove_file(backup);
+        }
 
         Ok(PackageResult {
             geopack: req.out.clone(),

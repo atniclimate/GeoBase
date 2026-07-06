@@ -37,6 +37,11 @@
  *   data-layer="<key>">` (checked mirrors active) and the key text.
  * - A layer whose geometry type is unsupported renders with the
  *   checkbox `disabled` and a `console.error` naming the type.
+ * - A layer whose `srs` is not `EPSG:4326` is likewise listed but
+ *   DISABLED, loudly: the features endpoint serves native-CRS GeoJSON,
+ *   and rendering projected coordinates as lon/lat would be a silent
+ *   CRS fallback (invariant: mis-CRS'd data fails loudly, never renders
+ *   wrong). The restriction lifts when viewer-side reprojection lands.
  *
  * ## MapLibre ids + styling rule
  *
@@ -156,12 +161,27 @@ export function initLayerPanel(
             continue;
           }
           const geometry = layer.geometry_type.toUpperCase();
-          const supported = supportedGeometry(geometry);
+          let supported = supportedGeometry(geometry);
           if (!supported) {
             // eslint-disable-next-line no-console
             console.error(`[GeoBase] unsupported layer geometry '${layer.geometry_type}' for ${key}`);
           }
-          const catalogLayer: CatalogLayer = { key, pack: pack.id, table: layer.table, meta: layer, geometry };
+          if (supported && layer.srs !== RENDERABLE_SRS) {
+            supported = false;
+            // eslint-disable-next-line no-console
+            console.error(
+              `[GeoBase] refused layer ${key}: srs ${JSON.stringify(layer.srs)} is not ${RENDERABLE_SRS} — ` +
+                "the features endpoint serves native-CRS GeoJSON and this viewer does not reproject yet",
+            );
+          }
+          const catalogLayer: CatalogLayer = {
+            key,
+            pack: pack.id,
+            table: layer.table,
+            meta: layer,
+            geometry,
+            renderable: supported,
+          };
           layers.set(key, catalogLayer);
           appendLayerItem(panel, catalogLayer, supported, checkboxes, (nextKey) => {
             void applyToggle(nextKey).catch((err: unknown) => {
@@ -188,9 +208,9 @@ export function initLayerPanel(
         console.error(`[GeoBase] unknown layer key '${key}'`);
         continue;
       }
-      if (!supportedGeometry(layer.geometry)) {
+      if (!layer.renderable) {
         // eslint-disable-next-line no-console
-        console.error(`[GeoBase] refused unsupported layer '${key}' from URL`);
+        console.error(`[GeoBase] refused unrenderable layer '${key}' from URL`);
         continue;
       }
       try {
@@ -221,7 +241,7 @@ export function initLayerPanel(
     if (!KEY_RE.test(key)) throw new Error(`[GeoBase] invalid layer key '${key}'`);
     const layer = layers.get(key);
     if (layer === undefined) throw new Error(`[GeoBase] unknown layer key '${key}'`);
-    if (!supportedGeometry(layer.geometry)) throw new Error(`[GeoBase] unsupported layer '${key}'`);
+    if (!layer.renderable) throw new Error(`[GeoBase] unrenderable layer '${key}'`);
     if (nextActive) {
       if (activeKeys.includes(key)) return;
       const data = await featuresFor(layer, nodeBase, featureCache);
@@ -236,7 +256,7 @@ export function initLayerPanel(
     } else {
       if (!activeKeys.includes(key)) return;
       const settled = new Promise<void>((resolve) => map.once("idle", () => resolve()));
-      for (const id of styleLayerIds(layer).reverse()) {
+      for (const id of styleLayerIds(layer.key, layer.geometry).reverse()) {
         if (map.getLayer(id) !== undefined) map.removeLayer(id);
       }
       if (map.getSource(sourceId(key)) !== undefined) map.removeSource(sourceId(key));
@@ -256,6 +276,8 @@ export function initLayerPanel(
 const PACK_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const TABLE_RE = /^[a-z_][a-z0-9_]*$/;
 const KEY_RE = /^[a-z0-9][a-z0-9_-]*\.[a-z_][a-z0-9_]*$/;
+/** The only SRS this viewer renders truthfully until reprojection lands. */
+const RENDERABLE_SRS = "EPSG:4326";
 
 interface CatalogLayer {
   key: string;
@@ -263,6 +285,8 @@ interface CatalogLayer {
   table: string;
   meta: LayerMeta;
   geometry: string;
+  /** Geometry type supported AND srs renderable — set once at listing. */
+  renderable: boolean;
 }
 
 function layerKey(pack: string, table: string): string | null {
@@ -274,9 +298,9 @@ function sourceId(key: string): string {
   return `pkg:${key}`;
 }
 
-function styleLayerIds(layer: CatalogLayer): string[] {
-  const prefix = sourceId(layer.key);
-  switch (layer.geometry) {
+function styleLayerIds(key: string, geometry: string): string[] {
+  const prefix = sourceId(key);
+  switch (geometry) {
     case "POLYGON":
     case "MULTIPOLYGON":
       return [`${prefix}:fill`, `${prefix}:line`];
@@ -292,23 +316,14 @@ function styleLayerIds(layer: CatalogLayer): string[] {
 }
 
 function supportedGeometry(geometry: string): boolean {
-  return styleLayerIds({ key: "x.y", pack: "x", table: "y", meta: emptyMeta, geometry }).length > 0;
+  return styleLayerIds("x.y", geometry).length > 0;
 }
-
-const emptyMeta: LayerMeta = {
-  table: "y",
-  geometry_type: "POINT",
-  bounds: null,
-  srs: null,
-  tier: "T0",
-  color_seed: 0,
-};
 
 function styleLayers(layer: CatalogLayer): (FillLayerSpecification | LineLayerSpecification | CircleLayerSpecification)[] {
   const hue = layer.meta.color_seed % 360;
   const color = `hsl(${hue} 70% 55%)`;
   const dark = `hsl(${hue} 70% 35%)`;
-  const ids = styleLayerIds(layer);
+  const ids = styleLayerIds(layer.key, layer.geometry);
   const source = sourceId(layer.key);
   switch (layer.geometry) {
     case "POLYGON":
@@ -500,7 +515,9 @@ function isLayerMeta(value: unknown): value is LayerMeta {
     (value.srs === null || typeof value.srs === "string") &&
     typeof value.tier === "string" &&
     typeof value.color_seed === "number" &&
-    Number.isFinite(value.color_seed)
+    Number.isInteger(value.color_seed) &&
+    value.color_seed >= 0 &&
+    value.color_seed <= 0xffff_ffff
   );
 }
 
