@@ -11,6 +11,14 @@ Writes into data/fixtures/geopack/ (tiny, committed-fixture-sized; AGENTS.md §7
   touching the top-right corner, so nodata crosses full and partial tiles.
 - ``parcels_small.shp`` (+ .shx .dbf .prj) — 8 polygons inside the DEM extent,
   EPSG:26910, fields name (str), zone (int32), area_m2 (float64), one NULL zone.
+- ``landcover_small.shp`` / ``flood_small.shp`` (+ sidecars) — layer-gate
+  fixtures (Phase 1.1d): EPSG:4326 polygon clusters WEST and EAST of the
+  pinned gate camera (-123.13, 47.14) with visually distinct extents, so each
+  layer package repaints its own pixels independently. Fields: class (str) +
+  code (int32); scenario (str) + depth_m (float64).
+- ``landcover_pkg.toml`` / ``flood_pkg.toml`` — package manifests (frozen
+  schema: geobase-ingestor::package module docs) that `geopack package`
+  consumes to build the two gate GeoPacks.
 
 Determinism: fixed integer seed, analytic surface, no timestamps (the DBF
 last-update stamp is pinned), so reruns are byte-identical. The surface is
@@ -27,6 +35,7 @@ from __future__ import annotations
 import argparse
 import struct
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -63,6 +72,28 @@ DBF_UPDATE_STAMP = (126, 1, 1)  # pinned DBF header date (no timestamps in fixtu
 PARCEL_NAMES = [f"parcel_{i:02d}" for i in range(1, 9)]
 PARCEL_ZONES = [11, 12, 21, 0, 22, 31, 32, 41]  # index 3 becomes NULL (see below)
 NULL_ZONE_INDEX = 3
+
+# Layer-gate fixtures (Phase 1.1d): EPSG:4326, axis-aligned quads (w, s, e, n).
+# Landcover sits WEST of the pinned camera center (-123.13, 47.14), flood
+# EAST — the gate's independence assertions rely on the distinct extents.
+LAYER_EPSG = 4326
+LANDCOVER_WINDOW = (-123.24, 47.10, -123.14, 47.18)
+FLOOD_WINDOW = (-123.12, 47.09, -123.02, 47.17)
+LANDCOVER_FEATURES = [
+    ("forest", 11, (-123.235, 47.145, -123.205, 47.175)),
+    ("wetland", 22, (-123.200, 47.143, -123.170, 47.173)),
+    ("urban", 33, (-123.165, 47.140, -123.145, 47.168)),
+    ("meadow", 44, (-123.232, 47.110, -123.202, 47.139)),
+    ("shrub", 55, (-123.197, 47.107, -123.168, 47.136)),
+    ("water", 66, (-123.163, 47.105, -123.146, 47.133)),
+]
+FLOOD_FEATURES = [
+    ("minor", 0.35, (-123.115, 47.137, -123.085, 47.165)),
+    ("moderate", 0.80, (-123.080, 47.135, -123.050, 47.163)),
+    ("major", 1.45, (-123.045, 47.132, -123.025, 47.160)),
+    ("minor", 0.55, (-123.112, 47.098, -123.082, 47.129)),
+    ("major", 1.90, (-123.076, 47.095, -123.030, 47.126)),
+]
 
 
 def dem_values() -> np.ndarray:
@@ -175,6 +206,100 @@ def write_parcels(shp: Path) -> dict:
     return {"names": PARCEL_NAMES, "zones": PARCEL_ZONES, "areas": areas, "rings": rings}
 
 
+def _pin_dbf_stamp(dbf: Path) -> None:
+    """Pin the DBF header's last-update date (no timestamps in fixtures)."""
+    raw = bytearray(dbf.read_bytes())
+    raw[1:4] = bytes(DBF_UPDATE_STAMP)
+    dbf.write_bytes(bytes(raw))
+
+
+def rect_ring(rect: tuple[float, float, float, float]) -> list[tuple[float, float]]:
+    """Closed CW ring (shapefile winding) for an axis-aligned (w, s, e, n) rect."""
+    w, s, e, n = rect
+    return [(w, n), (e, n), (e, s), (w, s), (w, n)]
+
+
+def write_layer_shp(
+    shp: Path,
+    features: Sequence[tuple[str, object, tuple[float, float, float, float]]],
+    fields: list[str],
+    dtypes: list[str],
+) -> None:
+    geometry = np.array([wkb_polygon(rect_ring(rect)) for _, _, rect in features], dtype=object)
+    field_data = [
+        np.array([name for name, _, _ in features], dtype=object),
+        np.array([value for _, value, _ in features], dtype=dtypes[1]),
+    ]
+    ogr_write(
+        str(shp),
+        geometry,
+        field_data,
+        fields=fields,
+        layer=shp.stem,
+        driver="ESRI Shapefile",
+        crs=f"EPSG:{LAYER_EPSG}",
+        geometry_type="Polygon",
+    )
+    _pin_dbf_stamp(shp.with_suffix(".dbf"))
+
+
+def write_layer_manifest(path: Path, package_id: str, name: str, table: str, shp_name: str) -> None:
+    """Package manifest per the frozen schema (geobase-ingestor::package docs).
+    The input path is RELATIVE — resolved against the manifest's directory."""
+    path.write_text(
+        "\n".join(
+            [
+                "[package]",
+                f'id = "{package_id}"',
+                f'name = "{name}"',
+                'tier = "T0"',
+                'basis = "synthetic fixture - public by construction"',
+                "",
+                "[[inputs]]",
+                'kind = "vector"',
+                f'path = "{shp_name}"',
+                f'table = "{table}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def verify_layer_shp(
+    shp: Path,
+    features: Sequence[tuple[str, object, tuple[float, float, float, float]]],
+    fields: list[str],
+    window: tuple[float, float, float, float],
+) -> None:
+    """Re-open and assert every declared property — trust nothing not read back."""
+    prj = shp.with_suffix(".prj")
+    assert prj.is_file() and prj.stat().st_size > 0, f"{prj} missing or empty"
+    info = read_info(str(shp))
+    assert CRS.from_user_input(info["crs"]) == CRS.from_epsg(LAYER_EPSG), f"CRS: {info['crs']}"
+    assert info["features"] == len(features), f"{shp.name}: {info['features']} features"
+    got_fields = list(info["fields"])
+    assert got_fields == fields, f"{shp.name} fields {got_fields} != {fields}"
+
+    meta, _, geometry, field_data = ogr_read(str(shp))
+    values = dict(zip(list(meta["fields"]), field_data))
+    assert len(geometry) == len(features) and all(g is not None for g in geometry)
+    assert [str(v) for v in values[fields[0]]] == [name for name, _, _ in features]
+    for i, (_, want, _) in enumerate(features):
+        got = values[fields[1]][i]
+        assert got == want, f"{shp.name} {fields[1]}[{i}] {got!r} != {want!r}"
+    w, s, e, n = window
+    for _, _, (rw, rs, re_, rn) in features:
+        assert w <= rw < re_ <= e and s <= rs < rn <= n, (
+            f"{shp.name}: rect ({rw},{rs},{re_},{rn}) escapes window {window}"
+        )
+    print(
+        f"[fixture] {shp.name} EPSG:{LAYER_EPSG} {len(features)} polygon features, "
+        f"window lon [{w}, {e}] lat [{s}, {n}]"
+    )
+
+
 def _null_mask(arr: np.ndarray) -> np.ndarray:
     """Nulls as pyogrio may express them: masked array, or NaN after promotion
     of an int column with NULLs to float64."""
@@ -271,7 +396,17 @@ def main() -> int:
 
     dem = out_dir / "dem_small.tif"
     shp = out_dir / "parcels_small.shp"
-    for stale in [dem, *(shp.with_suffix(ext) for ext in SHP_EXTS)]:
+    landcover = out_dir / "landcover_small.shp"
+    flood = out_dir / "flood_small.shp"
+    stale_files = [
+        dem,
+        *(shp.with_suffix(ext) for ext in SHP_EXTS),
+        *(landcover.with_suffix(ext) for ext in SHP_EXTS),
+        *(flood.with_suffix(ext) for ext in SHP_EXTS),
+        out_dir / "landcover_pkg.toml",
+        out_dir / "flood_pkg.toml",
+    ]
+    for stale in stale_files:
         if stale.exists():
             stale.unlink()  # idempotent build: always from scratch
 
@@ -281,6 +416,21 @@ def main() -> int:
 
     expected = write_parcels(shp)
     verify_parcels(shp, expected)
+
+    write_layer_shp(landcover, LANDCOVER_FEATURES, ["class", "code"], ["object", "int32"])
+    verify_layer_shp(landcover, LANDCOVER_FEATURES, ["class", "code"], LANDCOVER_WINDOW)
+    write_layer_shp(flood, FLOOD_FEATURES, ["scenario", "depth_m"], ["object", "float64"])
+    verify_layer_shp(flood, FLOOD_FEATURES, ["scenario", "depth_m"], FLOOD_WINDOW)
+    write_layer_manifest(
+        out_dir / "landcover_pkg.toml",
+        "landcover-2026",
+        "Synthetic Landcover 2026",
+        "landcover",
+        landcover.name,
+    )
+    write_layer_manifest(
+        out_dir / "flood_pkg.toml", "flood-2026", "Synthetic Flood 2026", "flood", flood.name
+    )
 
     report_sizes(out_dir)
     print(f"[done] geopack fixtures written: {out_dir}")

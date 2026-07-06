@@ -83,3 +83,51 @@ jobs:
         with:
           name: node-render-gate-output
           path: engine-light/verify-out/
+
+  layer-gate:
+    name: Layer packages toggle + stack proof (Phase 1.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium (workspace-pinned Playwright)
+        run: pnpm --filter @geobase/engine-light exec playwright install --with-deps chromium
+      - name: Build Light Engine
+        run: pnpm --filter @geobase/engine-light build
+      - name: Build geopack CLI and node example
+        run: |
+          cargo build --locked -p geobase-ingestor --bin geopack
+          cargo build --locked -p geobase-engine-desktop --example node
+      - name: Package the two committed fixture layer packages
+        run: |
+          mkdir -p /tmp/layer-vault
+          ./target/debug/geopack package \
+            --manifest data/fixtures/geopack/landcover_pkg.toml \
+            --out /tmp/layer-vault/landcover-2026.gpkg --actor layer-gate-ci
+          ./target/debug/geopack package \
+            --manifest data/fixtures/geopack/flood_pkg.toml \
+            --out /tmp/layer-vault/flood-2026.gpkg --actor layer-gate-ci
+      - name: Boot grounded node and run the layer gate through it
+        run: |
+          ./target/debug/examples/node place.example.toml /tmp/layer-vault \
+            engine-light/public/tiles/terrain 8766 &
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8766/api/node >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8766/api/packs
+          NODE_URL=http://127.0.0.1:8766 pnpm --filter @geobase/engine-light run verify:layers
+      - name: Upload captures (evidence survives failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-gate-output
+          path: engine-light/verify-out/layers/

@@ -75,10 +75,29 @@ DNS-rebinding + CORS loopback guard, T2/T3 feature serving refused until the
 Phase 1.2 ceremony exists. Desktop shell is feature-gated (`--features
 shell`) so workspace CI stays webkit-free.
 
-### 1.1 — Layer packages
+### 1.1 — Layer packages  *(complete — gate met)*
 Generalize import so GeoPackages/shapefiles register as stackable layer packages
 (LandCover, Flood projections, Responsible Siting). A package's effective tier is
 the most restrictive of its datasets (already modeled in `geobase-core`).
+Shipped: `geopack package --manifest pkg.toml` (one GeoPack = one layer package;
+frozen manifest schema in `geobase-ingestor::package` docs), the
+`GET /api/packs/{id}/layers` render-metadata surface (T0/T1 only — T2/T3 refuse
+before the artifact is opened), and the engine-light layer panel with
+URL-as-state (`?layers=pack.table,…` — shareable views; same state boots the
+desktop shell via `GEOBASE_LAYERS`).
+
+**Gate artifact:** [`docs/verification/phase-1.1-desktop-layers.png`](verification/phase-1.1-desktop-layers.png)
+— the desktop shell rendering both fixture layer packages (landcover +
+flood) stacked over the node-served T0 baseline. Ongoing enforcement: the
+`layer-gate` CI job packages the two committed fixture manifests with the
+real `geopack` CLI, boots a grounded node, and pixel-diff-asserts in
+`engine-light/scripts/verify-layers.mjs` that each package repaints alone,
+stacks on the other, differs from the other, and removes cleanly back to
+baseline — plus the `?layers=` boot restoring the same render. Raster
+overlays (color ramps) are deliberately out of scope until a later phase;
+vector-layer fixtures are natively EPSG:4326 because the features endpoint
+serves native-CRS GeoJSON (viewer-side reprojection arrives with a wider
+CRS phase).
 
 ### 1.2 — TSDF enforcement + ceremony
 Turn policy into mechanism: tier-based access control, an FPIC permissions

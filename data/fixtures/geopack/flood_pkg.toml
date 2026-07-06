@@ -1,0 +1,10 @@
+[package]
+id = "flood-2026"
+name = "Synthetic Flood 2026"
+tier = "T0"
+basis = "synthetic fixture - public by construction"
+
+[[inputs]]
+kind = "vector"
+path = "flood_small.shp"
+table = "flood"

@@ -1,0 +1,10 @@
+[package]
+id = "landcover-2026"
+name = "Synthetic Landcover 2026"
+tier = "T0"
+basis = "synthetic fixture - public by construction"
+
+[[inputs]]
+kind = "vector"
+path = "landcover_small.shp"
+table = "landcover"

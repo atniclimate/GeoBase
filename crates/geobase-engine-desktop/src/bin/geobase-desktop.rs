@@ -13,6 +13,10 @@
 //! - `GEOBASE_VAULT`  — GeoPack vault dir; default `data/vault`.
 //! - `GEOBASE_TILES`  — pre-derived T0 pyramid; default
 //!   `engine-light/public/tiles/terrain` when present.
+//! - `GEOBASE_LAYERS` — optional boot view state (Phase 1.1): comma-joined
+//!   layer keys surfaced to the app as the `?layers=` URL param before it
+//!   boots (URL-as-state, desktop form — the panel's grammar validation
+//!   still applies; unknown keys are loudly dropped by the app).
 //!
 //! Build: `pnpm --filter @geobase/engine-light run build:desktop`, then
 //! `cargo run -p geobase-engine-desktop --features shell --bin geobase-desktop`.
@@ -77,9 +81,26 @@ fn main() {
     let addr = handle.addr;
     println!("[geobase-desktop] node server on http://{addr}");
 
+    // Boot view state: injected only through the layer-key alphabet so the
+    // init script cannot be escaped by env content.
+    let layers: String = std::env::var("GEOBASE_LAYERS")
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ',' | '-' | '_'))
+        .collect();
+
     tauri::Builder::default()
         .setup(move |app| {
-            let inject = format!("window.__GEOBASE_NODE__ = 'http://{addr}';");
+            let mut inject = format!("window.__GEOBASE_NODE__ = 'http://{addr}';");
+            if !layers.is_empty() {
+                inject.push_str(&format!(
+                    "if (!new URLSearchParams(location.search).has('layers')) {{\
+                       const u = new URL(location.href);\
+                       u.searchParams.set('layers', '{layers}');\
+                       history.replaceState(null, '', u);\
+                     }}"
+                ));
+            }
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",

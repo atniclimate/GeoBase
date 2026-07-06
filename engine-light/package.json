@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "build:desktop": "tsc --noEmit && vite build --base=./ --outDir dist-desktop",
     "preview": "vite preview",
-    "verify:render": "node scripts/verify-render.mjs"
+    "verify:render": "node scripts/verify-render.mjs",
+    "verify:layers": "node scripts/verify-layers.mjs"
   },
   "dependencies": {
     "maplibre-gl": "^4.7.1"
