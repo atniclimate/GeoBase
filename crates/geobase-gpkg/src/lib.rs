@@ -15,6 +15,7 @@
 //! identically from both. `TSDF_METADATA_URI` is the discriminator.
 
 pub mod ceremony;
+pub mod cipher;
 pub mod raster;
 pub mod vector;
 
