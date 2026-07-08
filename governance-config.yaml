@@ -1,0 +1,31 @@
+# GeoBase Governance & Sovereign State Definition
+# Authority: Patrick Freeland
+# Status: IMMUTABLE FOR LLM EXECUTION
+
+fpic_semantics:
+  standard: "Aligns with UN Declaration on the Rights of Indigenous Peoples (UNDRIP)."
+  tribal_requirement: "Requires formal acknowledgment of sharing, typically via a signed agreement."
+  individual_requirement: "Requires verbal consent with verified witnesses."
+  # CORRECTED 2026-07-07: the FPIC boolean gates the export of T2 DERIVED
+  # PRODUCTS (the opportunity shapefile) only. T3 data NEVER leaves the node
+  # (architectural egress guarantee, AGENTS.md §3) — there is no T3 export
+  # path to gate, and none may ever be built.
+  enforcement: "Code must require a boolean confirmation of these conditions before exporting a T2 derived product. T3 is never exportable under any condition."
+
+data_sovereignty_source_of_truth:
+  repository: "https://github.com/atniclimate/TieredSovereignDataFramework"
+  instruction: "Use TSDF for all legal, liability, and governance data models. Do NOT halt GeoBase development if TSDF is incomplete; mock the TSDF response and proceed."
+
+pilot_dependency:
+  status: "RESOLVED."
+  instruction: "Multiple Tribes are actively utilizing the RStep framework. GeoBase does not require a net-new Pilot Tribe to proceed. Proceed to Spec-Complete immediately."
+
+security_review:
+  status: "DEFERRED TO IRB."
+  instruction: "Institutional Review Board (IRB) handles formal review of codebase, intake, and output methods post-functionality. Do not halt execution waiting for security sign-off. Ensure adversarial egress tests pass locally."
+
+synthetic_fixture_scenario:
+  context: "Federal funding (via NGO/State/InterTribal org) to identify energy infrastructure siting."
+  tribal_action: "Tribe explores digital twin internally, marks areas of opportunity (not areas of restriction)."
+  export_action: "Tribe exports ONLY the GIS shapefile of the opportunity area to the federally funded team."
+  security_goal: "Prevent FOIA extraction; ensure federated local compute security."
