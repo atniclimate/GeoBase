@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use geobase_engine_desktop::server::{serve, ServerConfig};
+use geobase_engine_desktop::server::{dev_unencrypted_cipher_if_opted_in, serve, ServerConfig};
 use geobase_engine_desktop::Node;
 
 #[tokio::main]
@@ -43,6 +43,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             port,
             tiles_dir,
             exports_dir,
+            // Fail-closed by default; dev-plaintext only via an explicit
+            // GEOBASE_DEV_UNENCRYPTED opt-in (loudly warned). Even this
+            // local harness never silently defaults to plaintext T3.
+            at_rest: dev_unencrypted_cipher_if_opted_in(),
         },
     )
     .await?;

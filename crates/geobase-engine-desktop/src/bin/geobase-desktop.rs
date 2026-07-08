@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use geobase_engine_desktop::server::{serve, ServerConfig};
+use geobase_engine_desktop::server::{dev_unencrypted_cipher_if_opted_in, serve, ServerConfig};
 use geobase_engine_desktop::Node;
 
 fn env_path(key: &str) -> Option<PathBuf> {
@@ -73,12 +73,18 @@ fn main() {
     // Export capability is opted into deliberately (GEOBASE_EXPORTS), never
     // default-on.
     let exports_dir = env_path("GEOBASE_EXPORTS");
+    // Fail-closed by default: a production desktop run refuses to write the
+    // T3 export ledger in plaintext. Dev-plaintext is an EXPLICIT opt-in via
+    // GEOBASE_DEV_UNENCRYPTED (stamped UNENCRYPTED-DEV, loudly warned) — never
+    // the default for the shipped binary.
+    let at_rest = dev_unencrypted_cipher_if_opted_in(); // fail-closed unless opted in
     let handle = match runtime.block_on(serve(
         Arc::new(node),
         ServerConfig {
             port: 0,
             tiles_dir,
             exports_dir,
+            at_rest,
         },
     )) {
         Ok(handle) => handle,

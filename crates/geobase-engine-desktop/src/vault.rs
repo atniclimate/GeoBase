@@ -73,6 +73,14 @@ pub fn scan(dir: &Path) -> Result<Vec<CatalogEntry>, VaultError> {
         if !is_gpkg_path(&path) {
             continue;
         }
+        // Defense in depth: the export ledger carries this reserved name and
+        // is a T3 node-history artifact. It is meant to live in `exports_dir`
+        // (outside the vault), but if a node is ever misconfigured so the two
+        // overlap, the ledger must STILL never be catalogued/served. Skip it
+        // by name unconditionally.
+        if is_reserved_ledger(&path) {
+            continue;
+        }
         entries.push(scan_pack(path)?);
     }
 
@@ -148,6 +156,16 @@ fn read_tables(gpkg: &GeoPackage, path: &str) -> Result<Vec<TableInfo>, VaultErr
         })?);
     }
     Ok(tables)
+}
+
+/// The reserved file name of the T3 export ledger (`export.rs`). Never
+/// catalogued, wherever it is found.
+pub const RESERVED_LEDGER_NAME: &str = "node-audit.gpkg";
+
+fn is_reserved_ledger(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case(RESERVED_LEDGER_NAME))
 }
 
 fn is_gpkg_path(path: &Path) -> bool {

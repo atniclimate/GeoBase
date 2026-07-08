@@ -143,6 +143,11 @@ pub struct ExportOutcome {
 pub enum ExportError {
     #[error(transparent)]
     Refused(#[from] geobase_gpkg::ceremony::ExportRefused),
+    /// The node cannot write the T3 export ledger without configured
+    /// at-rest encryption (fail-closed). The route maps this to 503 —
+    /// the node is not provisioned to store sovereign history safely.
+    #[error(transparent)]
+    Encryption(#[from] geobase_gpkg::cipher::EncryptionRefused),
     #[error("export request invalid: {0}")]
     Invalid(String),
     #[error("export already exists: {0} (pick a new product name)")]
@@ -163,11 +168,18 @@ pub enum ExportError {
 /// are removed and no success rows are written.
 pub fn export_product(
     gate: &dyn CeremonyGate,
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
     request: &ExportRequest,
     sources: &[SourcePack],
 ) -> Result<ExportOutcome, ExportError> {
     validate_request(request, sources)?;
+    // Fail FAST and fail CLOSED: the export writes a T3 ledger, so if this
+    // node cannot store it encrypted, refuse BEFORE any product bytes are
+    // written — no plaintext product is left on disk by a node that then
+    // can't audit it. (The ledger's own `open_ledger` re-authorizes at the
+    // true write chokepoint; this early check is the fast path.)
+    cipher.authorize_at_rest(geobase_tsdf::Tier::T3)?;
     let (tsdf_version, tsdf_origin) = tsdf_info()?;
 
     let source_tier = sources
@@ -187,8 +199,10 @@ pub fn export_product(
         Ok(record) => record,
         Err(refused) => {
             // Refusals are audited too — nothing PRODUCT-related is
-            // written, but the ledger records that the ask happened.
-            let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin)?;
+            // written, but the ledger records that the ask happened. (On a
+            // fail-closed node the ledger write itself refuses first, so a
+            // node with no cipher cannot export at all — correct posture.)
+            let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
             ledger.append_audit(&geobase_gpkg::AuditEntry {
                 dataset_id: request.product.clone(),
                 action: "export.refused".into(),
@@ -294,7 +308,7 @@ pub fn export_product(
         verify_product(&shp_path, request, sources)?;
 
         // Audit AFTER verification: the rows attest to a verified export.
-        let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin)?;
+        let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
         let ceremony_id = ledger.append_audit(&geobase_gpkg::AuditEntry {
             dataset_id: request.product.clone(),
             action: "export.ceremony".into(),
@@ -506,11 +520,20 @@ fn verify_product(
 }
 
 /// Open (or create + T3-tag) the export ledger.
+///
+/// The ledger is a **T3 artifact** (node history that never leaves the
+/// node), so its at-rest write is authorized through `cipher` BEFORE any
+/// bytes land. A fail-closed node refuses here — no plaintext ledger is
+/// ever created — which is what closes the plaintext-ledger hole. A
+/// dev-plaintext ledger is permanently stamped `UNENCRYPTED-DEV`.
 fn open_ledger(
     exports_dir: &Path,
     tsdf_version: &str,
     tsdf_origin: &str,
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
 ) -> Result<geobase_gpkg::GeoPackage, ExportError> {
+    use geobase_gpkg::cipher::AtRestProtection;
+    let protection = cipher.authorize_at_rest(geobase_tsdf::Tier::T3)?;
     std::fs::create_dir_all(exports_dir)?;
     let path = exports_dir.join("node-audit.gpkg");
     if path.is_file() {
@@ -522,6 +545,17 @@ fn open_ledger(
         "classification_basis".into(),
         serde_json::Value::String("node-local export ledger — never leaves the node".into()),
     );
+    // The poison stamp travels with the artifact: a dev-plaintext ledger is
+    // permanently marked non-production so a real node can refuse it. (There
+    // is no "encrypted" stamp path here yet — the Phase 1.2 cipher impl adds
+    // real encryption + a truthful stamp; until then the only protections are
+    // "fail-closed refuse" and "dev-plaintext, stamped".)
+    if protection == AtRestProtection::UnencryptedDev {
+        extras.insert(
+            "at_rest".into(),
+            serde_json::Value::String(geobase_gpkg::cipher::UNENCRYPTED_DEV_STAMP.into()),
+        );
+    }
     ledger.write_tsdf_tag(&geobase_gpkg::TsdfTag {
         table: None,
         tier: geobase_tsdf::Tier::T3,
@@ -754,7 +788,14 @@ mod tests {
             "wind-north",
             vec![square((0.0, 0.0), 0.001), square((0.01, 0.0), 0.002)],
         );
-        let outcome = export_product(&ProvisionalDevGate, &exports, &req, &[source]).unwrap();
+        let outcome = export_product(
+            &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &exports,
+            &req,
+            &[source],
+        )
+        .unwrap();
 
         assert_eq!(outcome.tier, Tier::T2);
         assert_eq!(outcome.features_written, 2);
@@ -784,6 +825,108 @@ mod tests {
         assert_eq!(outcome.audit_ids, vec![trail[0].id, trail[1].id]);
     }
 
+    // === ADVERSARIAL EGRESS GATE (ledger half) — see server.rs for A1–A6. ===
+
+    /// [EGRESS-GATE A7] Fail-closed: a node with the default cipher CANNOT
+    /// write the T3 ledger. No plaintext sovereign bytes ever hit disk, and
+    /// no product is released either.
+    #[test]
+    fn egress_gate_a7_fail_closed_refuses_ledger_and_writes_nothing() {
+        let dir = temp_dir("a7-failclosed");
+        let exports = dir.join("exports");
+        let source = source_pack(&dir, "capacity", Tier::T0, &source_ring());
+        let err = export_product(
+            &ProvisionalDevGate,
+            &geobase_gpkg::cipher::FailClosedCipher,
+            &exports,
+            &request("blocked", vec![square((0.0, 0.0), 0.001)]),
+            std::slice::from_ref(&source),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ExportError::Encryption(_)));
+        assert!(err.to_string().contains("fail-closed"));
+        // The ledger was never created, and NO product artifact of any kind
+        // is left on disk (fail-fast happens before the product is written;
+        // belt-and-suspenders: assert every sidecar extension is absent).
+        assert!(!exports.join("node-audit.gpkg").exists());
+        for ext in ["shp", "shx", "dbf", "prj", "tsdf.json"] {
+            assert!(
+                !exports.join(format!("blocked.{ext}")).exists(),
+                "no blocked.{ext} may survive a fail-closed refusal"
+            );
+        }
+    }
+
+    /// [EGRESS-GATE A7] The dev-plaintext ledger is permanently poison-stamped
+    /// UNENCRYPTED-DEV so a production node can refuse to treat it as valid.
+    #[test]
+    fn egress_gate_a7_dev_plaintext_ledger_is_poison_stamped() {
+        let dir = temp_dir("a7-devstamp");
+        let exports = dir.join("exports");
+        let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
+        export_product(
+            &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &exports,
+            &request("stamped", vec![square((0.0, 0.0), 0.001)]),
+            std::slice::from_ref(&source),
+        )
+        .unwrap();
+        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
+        let tags = ledger.read_tsdf_tags().unwrap();
+        let geopackage_tag = tags
+            .iter()
+            .find(|t| t.scope == "geopackage")
+            .expect("ledger carries a geopackage-scope tag");
+        assert_eq!(
+            geopackage_tag.payload["at_rest"],
+            geobase_gpkg::cipher::UNENCRYPTED_DEV_STAMP,
+            "the dev-plaintext ledger must carry the poison stamp"
+        );
+    }
+
+    /// [EGRESS-GATE A8] KNOWN GAP (ignored). `verify_product` check #4 uses
+    /// EXACT coordinate equality (`coord_multiset` over `f64::to_bits`), so a
+    /// source geometry offset by a single ULP is not recognised as a trace
+    /// and WOULD be republished in the product. The fix is a tolerance /
+    /// minimum-distance band in check #4 (ADD to the exact check, never weaken
+    /// it), tracked as a scoped follow-on. Un-`ignore` when that lands.
+    #[test]
+    #[ignore = "known gap: 1-ULP near-trace escapes exact-equality verify_product #4 (scoped follow-on)"]
+    fn egress_gate_a8_near_trace_is_refused() {
+        let dir = temp_dir("a8-neartrace");
+        let exports = dir.join("exports");
+        let ring = source_ring();
+        let source = source_pack(&dir, "capacity", Tier::T1, &ring);
+        // Trace the source ring but nudge every coordinate by one ULP.
+        let nudged = geo_types::Polygon::new(
+            geo_types::LineString::from(
+                ring.iter()
+                    .map(|&(x, y)| {
+                        (
+                            f64::from_bits(x.to_bits() + 1),
+                            f64::from_bits(y.to_bits() + 1),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            vec![],
+        );
+        let result = export_product(
+            &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &exports,
+            &request("neartrace", vec![nudged]),
+            std::slice::from_ref(&source),
+        );
+        // DESIRED (fails today → ignored): a near-trace is refused like an
+        // exact trace.
+        assert!(
+            matches!(result, Err(ExportError::Verification(_))),
+            "near-trace of a source must be refused"
+        );
+    }
+
     #[test]
     fn t3_source_pack_is_refused_with_only_refusal_ledger() {
         let dir = temp_dir("t3");
@@ -792,6 +935,7 @@ mod tests {
 
         let err = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &request("secret", vec![square((0.0, 0.0), 0.001)]),
             &[source],
@@ -827,6 +971,7 @@ mod tests {
         );
         let err = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &request("traced", vec![traced]),
             &[source],
@@ -851,6 +996,7 @@ mod tests {
 
         export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &request("site", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
@@ -858,6 +1004,7 @@ mod tests {
         .unwrap();
         let err = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &request("site", vec![square((0.02, 0.0), 0.001)]),
             &[source],
@@ -874,6 +1021,7 @@ mod tests {
 
         let bad_name = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &request("Bad Name", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
@@ -883,6 +1031,7 @@ mod tests {
 
         let empty = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &request("empty", vec![]),
             std::slice::from_ref(&source),
@@ -894,6 +1043,7 @@ mod tests {
         nan_score.features[0].score = f64::NAN;
         let err = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &nan_score,
             std::slice::from_ref(&source),
@@ -905,6 +1055,7 @@ mod tests {
         let projected = request("projected", vec![square((523000.0, 5215000.0), 100.0)]);
         let err = export_product(
             &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
             &exports,
             &projected,
             std::slice::from_ref(&source),
@@ -922,8 +1073,14 @@ mod tests {
             }],
             ..request("degenerate", vec![])
         };
-        let err =
-            export_product(&ProvisionalDevGate, &exports, &degenerate, &[source]).unwrap_err();
+        let err = export_product(
+            &ProvisionalDevGate,
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &exports,
+            &degenerate,
+            &[source],
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("distinct vertices"));
     }
 }

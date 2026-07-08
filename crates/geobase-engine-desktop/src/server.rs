@@ -48,6 +48,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use geobase_gpkg::cipher::{AtRestCipher, DevPlaintextCipher, FailClosedCipher};
 use geobase_gpkg::GeoPackage;
 use geobase_tsdf::Tier;
 use serde_json::{json, Value};
@@ -67,6 +68,11 @@ pub struct ServerConfig {
     /// refuses `POST /api/export` with 503 — exporting is opted into
     /// deliberately, never a default-on capability.
     pub exports_dir: Option<PathBuf>,
+    /// At-rest encryption seam for T3 artifacts (the export ledger). `None`
+    /// defaults to [`FailClosedCipher`]: a node with no configured cipher
+    /// refuses to write the T3 ledger at all (fail-closed — no plaintext
+    /// sovereign data). Local dev/demo nodes opt into `DevPlaintextCipher`.
+    pub at_rest: Option<Arc<dyn AtRestCipher>>,
 }
 
 /// A running server: bound address plus graceful shutdown.
@@ -96,8 +102,29 @@ struct ServerState {
     node: Arc<Node>,
     /// The export-authorization seam (Phase 1.2 swaps the implementation).
     gate: Arc<dyn geobase_gpkg::ceremony::CeremonyGate + Send + Sync>,
+    /// The at-rest encryption seam for T3 writes (fail-closed by default).
+    at_rest: Arc<dyn AtRestCipher>,
     /// `None` refuses `POST /api/export` — exporting is deliberate.
     exports_dir: Option<PathBuf>,
+}
+
+/// Resolve the at-rest cipher for a LOCAL dev/demo binary from the
+/// environment. Returns `None` — **fail-closed, the production default** —
+/// unless `GEOBASE_DEV_UNENCRYPTED` is set, in which case the dev-plaintext
+/// cipher is returned with a loud one-time warning. A shipped node MUST NEVER
+/// silently default to plaintext T3, so this is the only sanctioned way a
+/// binary opts into it, and it is always explicit and visible.
+pub fn dev_unencrypted_cipher_if_opted_in() -> Option<Arc<dyn AtRestCipher>> {
+    if std::env::var_os("GEOBASE_DEV_UNENCRYPTED").is_some() {
+        eprintln!(
+            "[geobase] WARNING: GEOBASE_DEV_UNENCRYPTED is set — the T3 export ledger \
+             will be written UNENCRYPTED (dev only, permanently stamped UNENCRYPTED-DEV). \
+             Never set this on a node holding real sovereign data."
+        );
+        Some(Arc::new(DevPlaintextCipher::new()))
+    } else {
+        None
+    }
 }
 
 /// Build the router for `node` (pure; unit-testable via tower `oneshot`).
@@ -108,6 +135,12 @@ pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
         // CeremonyGate implementation replaces the provisional one HERE,
         // nowhere else.
         gate: Arc::new(geobase_gpkg::ceremony::ProvisionalDevGate),
+        // Fail-closed by default: absent an explicitly configured cipher,
+        // the node refuses to write T3 at rest (no plaintext ledger).
+        at_rest: config
+            .at_rest
+            .clone()
+            .unwrap_or_else(|| Arc::new(FailClosedCipher)),
         exports_dir: config.exports_dir.clone(),
     };
     let mut router = axum::Router::new()
@@ -436,9 +469,16 @@ async fn api_export(
         features,
     };
     let gate = state.gate.clone();
+    let cipher = state.at_rest.clone();
     // File IO + SQLite are blocking; keep the runtime responsive.
     let outcome = tokio::task::spawn_blocking(move || {
-        export_product(gate.as_ref(), &exports_dir, &request, &sources)
+        export_product(
+            gate.as_ref(),
+            cipher.as_ref(),
+            &exports_dir,
+            &request,
+            &sources,
+        )
     })
     .await;
     let outcome = match outcome {
@@ -493,6 +533,10 @@ async fn api_export(
                 ExportError::Refused(_) => StatusCode::FORBIDDEN,
                 ExportError::Invalid(_) => StatusCode::BAD_REQUEST,
                 ExportError::Exists(_) => StatusCode::CONFLICT,
+                // Fail-closed: the node is not provisioned to store the T3
+                // export ledger safely — a service-unavailable condition,
+                // not a client error.
+                ExportError::Encryption(_) => StatusCode::SERVICE_UNAVAILABLE,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
             status_json(status, json!({"reason": err.to_string()}), None)
@@ -878,6 +922,224 @@ mod tests {
     async fn json_response(response: Response) -> Value {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // ===================================================================
+    // ADVERSARIAL EGRESS GATE (A1–A6). Prove T3 cannot be extracted through
+    // the loopback API or the catalog. Attacker model: loopback network +
+    // filesystem read of vault/exports. OUT OF SCOPE (operational controls,
+    // not software): OS memory dumps, admin/physical access, screenshots —
+    // G1's three-part scoping, docs/handoffs/geobase-completion-plan.md §2.
+    // A7 (at-rest ledger) + A8 (near-trace, ignored) live in export.rs.
+    // ===================================================================
+
+    const T3_SENTINEL: &str = "T3_SENTINEL_DO_NOT_LEAK";
+
+    /// A T3 pack carrying a sentinel feature — the needle every attack must
+    /// fail to extract from any reachable surface.
+    fn t3_sentinel_pack(name: &str) -> CatalogEntry {
+        let path = temp_path(name);
+        let gpkg = GeoPackage::create(&path).unwrap();
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: "sites".into(),
+                identifier: "Sensitive sites".into(),
+                srs_epsg: 4326,
+                srs_definition: None,
+                geometry_type: "POINT".into(),
+                columns: vec![geobase_gpkg::vector::ColumnDef {
+                    name: "label".into(),
+                    sql_type: "TEXT",
+                }],
+                bounds: (-123.456, 48.789, -123.456, 48.789),
+            },
+        )
+        .unwrap();
+        let geom = gpkg_point_blob(-123.456, 48.789);
+        gpkg.conn()
+            .execute(
+                "INSERT INTO sites (geom, label) VALUES (?1, ?2)",
+                (&geom, T3_SENTINEL),
+            )
+            .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T3,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
+        .unwrap();
+        drop(gpkg);
+        CatalogEntry {
+            id: path.file_stem().unwrap().to_string_lossy().into_owned(),
+            path,
+            tier: Tier::T3,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![TableInfo {
+                name: "sites".into(),
+                data_type: "features".into(),
+            }],
+        }
+    }
+
+    /// [EGRESS-GATE A1] Layer metadata for a T3 pack is refused (403) and no
+    /// layer data leaks in the body.
+    #[tokio::test]
+    async fn egress_gate_a1_t3_layers_refused() {
+        let entry = t3_sentinel_pack("a1-t3.gpkg");
+        let id = entry.id.clone();
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/layers"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = json_response(response).await;
+        assert_eq!(body["tier"], "T3");
+        assert!(body.get("layers").is_none(), "no layer metadata may leak");
+    }
+
+    /// [EGRESS-GATE A2] Feature data for a T3 pack is refused (403) and the
+    /// sentinel never appears in the response bytes.
+    #[tokio::test]
+    async fn egress_gate_a2_t3_features_refused() {
+        let entry = t3_sentinel_pack("a2-t3.gpkg");
+        let id = entry.id.clone();
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/tables/sites/features"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let raw = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains(T3_SENTINEL));
+    }
+
+    /// [EGRESS-GATE A3] `/api/packs` exposes catalog metadata only — a T3 pack
+    /// is listed (id/tier/tables) but NO feature data / sentinel leaks.
+    #[tokio::test]
+    async fn egress_gate_a3_packs_catalog_leaks_no_feature_data() {
+        let entry = t3_sentinel_pack("a3-t3.gpkg");
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(Request::get("/api/packs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let raw = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&raw);
+        assert!(
+            text.contains("\"T3\""),
+            "the pack is catalogued as T3 metadata"
+        );
+        assert!(!text.contains(T3_SENTINEL), "but no feature data may leak");
+    }
+
+    /// [EGRESS-GATE A4] Exporting a product derived from a T3 source is
+    /// refused by the ceremony seam (403) — T3 can never be an export source.
+    #[tokio::test]
+    async fn egress_gate_a4_export_from_t3_source_refused() {
+        let entry = t3_sentinel_pack("a4-t3.gpkg");
+        let id = entry.id.clone();
+        let exports = temp_path("a4-exports");
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                // Dev cipher so the refusal itself can be audited; the point
+                // is the ceremony 403, not the ledger.
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                ..ServerConfig::default()
+            },
+        );
+        let body = json!({
+            "product": "steal",
+            "source_packs": [id],
+            "requester": "attacker",
+            "features": [{
+                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
+                "score": 1.0
+            }]
+        });
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        // ...and NO product artifact was written before/alongside the refusal.
+        for ext in ["shp", "shx", "dbf", "prj", "tsdf.json"] {
+            assert!(
+                !exports.join(format!("steal.{ext}")).exists(),
+                "a refused T3-source export must write no steal.{ext}"
+            );
+        }
+    }
+
+    /// [EGRESS-GATE A5] The T3 export ledger is never catalogued — enforced by
+    /// name, not merely by living in a separate directory. Even placed INSIDE
+    /// the vault (a misconfiguration), the reserved `node-audit.gpkg` is
+    /// skipped by the scanner.
+    #[test]
+    fn egress_gate_a5_reserved_ledger_never_catalogued_even_inside_vault() {
+        let vault = temp_path("a5-vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        drop(GeoPackage::create(&vault.join("public.gpkg")).unwrap());
+        // Adversarial misconfiguration: the T3 ledger sitting in the vault.
+        let ledger = GeoPackage::create(&vault.join(crate::vault::RESERVED_LEDGER_NAME)).unwrap();
+        ledger
+            .write_tsdf_tag(&TsdfTag {
+                table: None,
+                tier: Tier::T3,
+                tsdf_version: "0.9.4".into(),
+                tsdf_source_origin: "vendored:embedded".into(),
+                classified_by: "test".into(),
+                extras: Map::new(),
+            })
+            .unwrap();
+        drop(ledger);
+        let catalog = crate::vault::scan(&vault).unwrap();
+        assert_eq!(catalog.len(), 1, "only the public pack is catalogued");
+        assert_eq!(catalog[0].id, "public");
+        assert!(
+            catalog.iter().all(|e| e.id != "node-audit"),
+            "the reserved T3 ledger must never be catalogued, even inside the vault"
+        );
+    }
+
+    /// [EGRESS-GATE A6] "When in doubt, T3": an untagged pack catalogs as T3
+    /// and its layers are refused — a downgrade needs a tag it does not have.
+    #[tokio::test]
+    async fn egress_gate_a6_untagged_pack_is_t3_and_refused() {
+        let entry = create_pack("a6-untagged.gpkg", None);
+        let id = entry.id.clone();
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/layers"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json_response(response).await["tier"], "T3");
     }
 
     #[tokio::test]
@@ -1404,6 +1666,10 @@ mod tests {
             test_node(vec![entry]),
             &ServerConfig {
                 exports_dir: Some(exports_dir.clone()),
+                // Dev test node: opt into the dev cipher so the ledger writes
+                // (stamped UNENCRYPTED-DEV). The fail-closed default is
+                // exercised separately by the egress gate (A7).
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
                 ..ServerConfig::default()
             },
         );
