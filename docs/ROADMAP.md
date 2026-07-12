@@ -118,6 +118,20 @@ never transit. See `spec/fidp/`.
 Ingest LiDAR / remote sensing into secure GPKGs (T3 by default) and add an
 optional native Rust/`wgpu` render path for data too heavy for the browser.
 
+> **Note (2026-07-11, Phase 0 congruence):** a candidate digital-twin
+> expansion of this phase (deck.gl/COPC point-cloud streaming, an optional
+> CesiumJS escalation path) was scanned in now-**superseded** working docs
+> (`docs/GEOBASE-BUILD-DIRECTIVE.md`, `docs/GEOBASE-DIGITAL-TWIN-FEATURES.md`
+> — see their in-file status banners and `docs/DECISIONS.md` 2026-07-11).
+> Under DG-1's default (`docs/RELEASE-DEFINITION.md`, DRAFT), that scope is
+> **non-gating 1.x backlog only** and is not adopted here; this phase's
+> wording stays "optional native Rust/`wgpu`" and stays consistent with
+> `docs/ARCHITECTURE.md`'s rendering decision (a heavy-render path is "a
+> deferred Phase 2.1 option, not a v1 requirement"). If a future session
+> adopts the deck.gl direction, it is recorded as a fresh `docs/DECISIONS.md`
+> entry and this note is updated in the same commit — not read as
+> pre-authorization.
+
 ### 2.2 — Hardening & server-migration path
 Exercise the `LocalServerSource` so a Tribe can move TSDF governance to a private
 or local server by config alone. Full security review, packaging, and a

@@ -135,3 +135,69 @@ T2-tagged GPKG twin written in the same export transaction.
 pair sees no classification at all; accepted for 1.3 because the product
 contains ONLY painted-derived data (verifier-enforced) and the sharing
 workflow is Phase 1.2+ governance territory.
+
+## 2026-07-11 — Phase 0 congruence: track planning docs, supersede digital-twin scope, defer MANIFEST reorg
+
+**Trigger:** `PLAN_1.0.md` Phase 0 (P0.1-P0.7) — the plan's own drift audit
+found `MANIFEST.md`, `PLAN_1.0.md`, `docs/GEOBASE-BUILD-DIRECTIVE.md`, and
+`docs/GEOBASE-DIGITAL-TWIN-FEATURES.md` untracked and therefore without
+authority; `git status` at execution time additionally showed `DEPENDENCIES.md`
+untracked, correcting the plan's own "exactly four" count to five — noted here
+so the discrepancy is a recorded correction, not a silent miss.
+
+**P0.2 — commit or supersede.** `MANIFEST.md`, `PLAN_1.0.md`, and
+`DEPENDENCIES.md` are committed as tracked, governing/reference docs (the
+first two already state their own proposal-only / DG-1-pending status
+in-body; `DEPENDENCIES.md` is a read-only dependency audit with no
+ratification claims). `docs/GEOBASE-BUILD-DIRECTIVE.md` and
+`docs/GEOBASE-DIGITAL-TWIN-FEATURES.md` are committed with a `SUPERSEDED /
+OUT OF SCOPE FOR PRODUCT-1.0` header each, pointing at tracked
+`docs/ARCHITECTURE.md` (heavy-render is "a deferred Phase 2.1 option, not a
+v1 requirement") — retained as raw research material for **post-1.0 backlog
+only** (`PLAN_1.0.md` Backlog Queue B-1..B-4), not deleted, not ratified.
+Also corrects a stray "v1.0 — final" header inside `PLAN_1.0.md` itself
+(leftover template text contradicting the document's own DG-1-pending body)
+to the accurate "v0.2 — draft."
+
+**P0.6 — DG-1-consistent wording.** Under the default (DG-1 not yet
+ratified, but this is the stated default the whole plan operates against),
+tracked `docs/ROADMAP.md` 2.1 keeps its existing "optional native
+Rust/`wgpu`" wording; a note is added there recording that the deck.gl /
+digital-twin direction surveyed in the now-superseded directive remains
+backlog authority only, not adopted. No contradiction is introduced between
+`ROADMAP.md`, `ARCHITECTURE.md`, and the superseded docs' headers.
+
+**P0.7 — DG-5 disposition.** The `MANIFEST.md` repo reorganization (apps/,
+packages/, tools/ split) is **deferred to post-1.0** — the plan default.
+No files move in this pass or before the `v1.0.0` tag; `MANIFEST.md` remains
+a tracked proposal only. Final disposition (accept/defer/reject) is
+reconfirmed at Phase C, C8 pre-tag.
+
+**Choice:** commit all five untracked docs (correcting the count), supersede
+(not delete) the two digital-twin docs, defer the reorg. **Strongest
+surviving objection:** committing superseded material at all invites future
+readers to mistake retained research for live direction; mitigated by the
+loud in-file banner on both documents and this entry being the canonical
+cross-reference.
+
+## 2026-07-11 — DG-1 draft ratification recorded (`docs/RELEASE-DEFINITION.md`)
+
+**Trigger:** `PLAN_1.0.md` P0.1 — DG-1 ("where is the 1.0 line?") requires a
+tracked-commit resolution mechanism, never an untracked note.
+
+**Choice:** `docs/RELEASE-DEFINITION.md` is committed encoding the
+sovereignty-core default (Phases 1.2+1.3 as one combined acceptance gate +
+release hardening; F1-F4/federation/LiDAR are serial non-gating 1.x
+backlog), the source-of-truth hierarchy, and the acceptance-integrity rule
+(a gate is accepted exactly once, against the final sovereign mechanism,
+never `ProvisionalDevGate`). The file is committed in **DRAFT** status —
+this is Claude Code drafting the plan's stated default for Patrick's review,
+**not** an owner ratification. DG-1 remains open in `PLAN_1.0.md` until
+Patrick either ratifies the draft as-is (flips the file's own status line to
+RATIFIED in a Patrick-authored or Patrick-approved commit) or overrides the
+default.
+
+**Strongest surviving objection:** a committed "DRAFT" file could be
+mistaken for a resolved gate by a future session skimming file existence
+rather than content; mitigated by the file's own top-of-document status
+banner and by this entry stating explicitly that DG-1 is not yet resolved.
