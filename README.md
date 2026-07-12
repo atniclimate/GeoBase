@@ -72,8 +72,12 @@ pnpm --filter @geobase/engine-light dev
 
 ## Status
 
-**Phase 0.1 — scaffold & spine.** This is the foundation; feature work follows
-the roadmap. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+`docs/ROADMAP.md` is the single source of truth for phase-acceptance status —
+see it for what is accepted-complete versus in progress. This section is
+deliberately not a restated snapshot (a prior version drifted stale here); for
+the release-scope question ("what ships in 1.0"), see the DRAFT
+[`docs/RELEASE-DEFINITION.md`](docs/RELEASE-DEFINITION.md), pending owner
+ratification.
 
 ## Licensing
 
