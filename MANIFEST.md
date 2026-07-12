@@ -1,3 +1,17 @@
+# GeoBase — Repository Manifest
+
+> **STATUS: DATED POINT-IN-TIME INVENTORY (scanned 2026-07-11, pre-Phase-0
+> commits; tracked 2026-07-11 per `PLAN_1.0.md` P0.2).** This document is a
+> snapshot, not a live status source: for phase-acceptance status,
+> `docs/ROADMAP.md` is authoritative and this file is subordinate to it (and
+> to the source-of-truth hierarchy in `docs/RELEASE-DEFINITION.md`, DRAFT).
+> The "Proposed Reorganization" section below is a **proposal only — nothing
+> has been moved**; its execution is Decision Gate DG-5, recorded as
+> **deferred post-1.0** (`docs/DECISIONS.md` 2026-07-11). When repo layout or
+> phase status changes materially, re-scan or annotate this file rather than
+> letting it silently age (`PLAN_1.0.md` § Plan Congruence). Known post-scan
+> corrections are annotated inline in *[bracketed italics]*.
+
 ## What This Project Is
 
 GeoBase is an offline-first, sovereign geospatial platform for Tribal Nations. It combines one shared Rust data/compliance spine with two deployment engines: a grounded Rust/Tauri desktop node and a TypeScript/MapLibre light viewer. Its GeoPack ingestor turns supported raster and vector inputs into self-describing GeoPackages, while the Tiered Sovereign Data Framework (TSDF) supplies versioned classification rules. SoLO applications, beginning with RStep, use the same node and layer-package contracts to create shareable derived products without exposing source layers. This purpose and architecture are stated in `README.md` and `docs/ARCHITECTURE.md`; the operational sovereignty rules are defined by `AGENTS.md`, `governance-config.yaml`, `docs/TSDF-INTEGRATION.md`, and `spec/tsdf/tiers.toml`.
@@ -6,7 +20,7 @@ The defining constraints are visible in both plans and code: source CRS must be 
 
 ## Current Development Status
 
-- The authoritative roadmap marks Phases 0.1 through 1.1 complete: scaffold/spine, local 3D baseline rendering, GeoPack ingestion, the desktop node, and stackable layer packages (`docs/ROADMAP.md`). The corresponding observed artifacts are committed under `docs/verification/`, and ongoing checks are defined in `scripts/geopack_gate.py`, `engine-light/scripts/verify-render.mjs`, `engine-light/scripts/verify-layers.mjs`, and `.github/workflows/`. `README.md` still says “Phase 0.1,” so its short status paragraph is stale relative to `docs/ROADMAP.md` and the implementation.
+- The authoritative roadmap marks Phases 0.1 through 1.1 complete: scaffold/spine, local 3D baseline rendering, GeoPack ingestion, the desktop node, and stackable layer packages (`docs/ROADMAP.md`). The corresponding observed artifacts are committed under `docs/verification/`, and ongoing checks are defined in `scripts/geopack_gate.py`, `engine-light/scripts/verify-render.mjs`, `engine-light/scripts/verify-layers.mjs`, and `.github/workflows/`. *[At scan time `README.md` still said "Phase 0.1"; corrected 2026-07-11 by Phase 0 P0.3 — README now defers to `docs/ROADMAP.md` instead of restating status.]*
 - The Rust workspace is materially implemented across five crates listed in `Cargo.toml`: shared model/CRS contracts (`crates/geobase-core`), the pluggable TSDF resolver (`crates/geobase-tsdf`), GeoPackage metadata/raster/vector/ceremony/cipher support (`crates/geobase-gpkg`), GeoTIFF and shapefile ingestion plus package assembly (`crates/geobase-ingestor`), and the grounded node, vault, loopback API, and export pipeline (`crates/geobase-engine-desktop`). Their crate manifests and opened source modules support these descriptions.
 - Phase 1.2 is not complete as specified. A fail-closed at-rest cipher seam and an export-authorization trait exist, and T3 is refused unconditionally, but the only ceremony implementation is explicitly `ProvisionalDevGate`; the sovereign FPIC mechanism remains a handoff requirement (`crates/geobase-gpkg/src/cipher.rs`, `crates/geobase-gpkg/src/ceremony.rs`, `docs/CEREMONY-GATE.md`). This matches the unmarked Phase 1.2 entry in `docs/ROADMAP.md`.
 - Much of Phase 1.3 is implemented but its acceptance status is not recorded as complete in the roadmap. The SoLO SDK exposes node, layer, paint, and export contracts (`solo/sdk/src/index.ts`); RStep stacks node layers, paints opportunity polygons, and submits export requests (`solo/rstep/src/main.ts`, `solo/rstep/src/paint.ts`); and the desktop engine writes product-only shapefile exports with audit handling (`crates/geobase-engine-desktop/src/export.rs`, `crates/geobase-engine-desktop/src/server.rs`). However, the tracked `docs/PROCESS-MAP.md` still labels the end-to-end RStep observed-behavior gate as queued, and no tracked workflow named for that gate appears under `.github/workflows/`. Therefore this inventory treats Phase 1.3 as implemented/in progress, not accepted complete.

@@ -32,10 +32,19 @@ Concretely, for `v1.0.0` to be tagged:
 1. **TSDF enforcement is real, end-to-end.** The sovereign FPIC ceremony
    replaces `ProvisionalDevGate` at its single composition point
    (`crates/geobase-engine-desktop/src/server.rs` `router()`); at-rest
-   encryption of T3 is live behind the shipped `AtRestCipher` seam; the
-   requester is authenticated; the architectural T3 egress guarantee (no
-   export path, no network path, ever) is proven by an adversarial egress
-   test suite. This is roadmap Phase 1.2.
+   encryption of T3 is live **and fail-closed** behind the shipped
+   `AtRestCipher` seam (`crates/geobase-gpkg/src/cipher.rs`; default
+   `FailClosedCipher` — a missing or failed cipher refuses, never falls back
+   to plaintext); the requester is authenticated; the architectural T3 egress
+   guarantee is proven by an adversarial egress test suite — **T3 provably
+   non-exportable and non-networkable**; **T2 export requires a recorded
+   agreement**; and the **audit trail is complete** (append-only, every
+   authorization and refusal recorded). These are acceptance properties in
+   their own right, not implementation details: naming FPIC and
+   authentication does not by itself evidence the recorded agreement or
+   audit completeness, and naming the seam does not by itself evidence
+   fail-closed behavior — each is separately asserted at acceptance. This is
+   roadmap Phase 1.2 (`AGENTS.md` §3; `governance-config.yaml`).
 2. **RStep ships the paint-and-export flow, accepted exactly once, against
    the sovereign gate** — never against `ProvisionalDevGate`. The 1.3d
    end-to-end observed-behavior gate is green in CI, asserting the sovereign

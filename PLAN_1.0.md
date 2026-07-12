@@ -106,12 +106,15 @@ overstated it):
   claim that these "enforce continuously" was overstated; they *run*
   continuously.
 - **Missing entirely:** the RStep 1.3d gate — `docs/PROCESS-MAP.md` §8 marks it
-  "QUEUED — not yet built"; `solo/rstep/package.json`'s `verify:rstep` script is
-  `node scripts/verify-rstep.mjs`, pointing at **a file that does not exist**
-  (no `solo/rstep/scripts/` directory at all, verified 2026-07-11); no RStep job
-  exists in any tracked workflow (`grep -rni rstep .github/workflows/` returns
-  nothing). Building it is real engineering (fixtures, browser automation,
-  ledger inspection, pyogrio verification, CI wiring), not "wiring."
+  "QUEUED — not yet built". *(Updated 2026-07-11, Phase 0 P0.4: the previously
+  dangling `verify:rstep` reference — `solo/rstep/package.json` pointed at a
+  `scripts/verify-rstep.mjs` that did not exist — is repaired with a committed
+  honest stub at `solo/rstep/scripts/verify-rstep.mjs` that exits non-zero with
+  a "NOT YET BUILT (Phase A)" message. The stub is not the harness.)* No RStep
+  job exists in any tracked workflow (`grep -rni rstep .github/workflows/`
+  returns nothing). Building the real harness is real engineering (fixtures,
+  browser automation, ledger inspection, pyogrio verification, CI wiring), not
+  "wiring."
 - **Also missing:** pre-commit hooks, Windows/macOS CI of any kind,
   installer/signing/packaging jobs, release automation, SBOM/license gating,
   and any runtime network-denial harness. All CI runs on `ubuntu-latest`.
@@ -144,16 +147,21 @@ collects. Any export-enabled local page can therefore drive an unauthenticated
 T2 export today. Phase A installs an interim guard as its **first** microtask
 (A1).
 
-**Tree state** (verified 2026-07-11): local `main` matches `origin/main`
-exactly (`b7ad69c` — "fix(governance): FPIC boolean gates T2 product export, not
-T3"); there is no divergent implementation branch. The drift is documentary:
-`MANIFEST.md`, this plan, `docs/GEOBASE-BUILD-DIRECTIVE.md`, and
-`docs/GEOBASE-DIGITAL-TWIN-FEATURES.md` are all **untracked** (confirmed by
-`git status`), so the plan's scope currently has no committed backing;
-`README.md` still reports "Phase 0.1 — scaffold & spine" (line 75) against a
-roadmap showing 1.1 complete; tracked `ROADMAP.md` 2.1 still reads "optional
-native Rust/`wgpu`" against the untracked directive's deck.gl decision. Phase 0
-exists to close exactly this.
+**Tree state** *(reconciled 2026-07-11 after the Phase 0 docs commits; the
+paragraph below preserves the pre-Phase-0 baseline as history)*: local `main`
+is now **ahead of `origin/main`** by the Phase 0 docs-only commits (base
+`b7ad69c` — "fix(governance): FPIC boolean gates T2 product export, not T3";
+nothing pushed). The documentary drift Phase 0 existed to close is closed
+except DG-1 ratification: `MANIFEST.md`, this plan, `DEPENDENCIES.md` (a fifth
+untracked file the original count missed — recorded in `docs/DECISIONS.md`
+2026-07-11), `docs/GEOBASE-BUILD-DIRECTIVE.md`, and
+`docs/GEOBASE-DIGITAL-TWIN-FEATURES.md` are all now **tracked** (the two
+GEOBASE-* docs under SUPERSEDED banners); `README.md` no longer restates a
+phase inline and points at `docs/ROADMAP.md`; tracked `ROADMAP.md` 2.1 keeps
+"optional native Rust/`wgpu`" with a note that the superseded directive's
+deck.gl direction is backlog material only. What remains open from Phase 0 is
+exactly **P0.1's ratification act** — `docs/RELEASE-DEFINITION.md` is committed
+in DRAFT status, awaiting Patrick.
 
 Federation (2.0) is a placeholder (`spec/fidp/README.md`, "Not yet
 implemented."); 2.1/2.2 are unstarted.
@@ -168,7 +176,7 @@ also involves an external authority that is called out.
 
 | Gate | Owner | Question | Default | Evidence the owner needs | Blocks |
 |---|---|---|---|---|---|
-| **DG-1** | Author | Where is the 1.0 line? | **Sovereignty-core 1.0**: Phases 1.2+1.3 as one combined gate + release hardening; F1–F4/federation/LiDAR are serial 1.x backlog | Tracked `ARCHITECTURE.md` ("not a v1 requirement", rendering section) and `ROADMAP.md` vs the untracked build directive; digital-twin scope roughly doubles remaining work; solo maintainer gets no parallelism benefit | Everything after Phase 0; resolved by committing `docs/RELEASE-DEFINITION.md` |
+| **DG-1** | Author | Where is the 1.0 line? | **Sovereignty-core 1.0**: Phases 1.2+1.3 as one combined gate + release hardening; F1–F4/federation/LiDAR are serial 1.x backlog | Tracked `ARCHITECTURE.md` ("not a v1 requirement", rendering section) and `ROADMAP.md` vs the untracked build directive; digital-twin scope roughly doubles remaining work; solo maintainer gets no parallelism benefit | Everything after Phase 0; resolved **only when the owner records RATIFIED** in `docs/RELEASE-DEFINITION.md` (file existence/commit is not resolution — the file is committed in DRAFT status) |
 | **DG-2** | Author | Which at-rest cipher? | **Pure-Rust** candidate; SQLCipher's C dependency contradicts the tracked pure-Rust product decision (`docs/DECISIONS.md` 2026-07-06; `PROCESS-MAP.md` standing decisions) | Spike matrix: dependency posture, key management, migration, backup, failure semantics, lost-key (deliberately unrecoverable) policy fit | Phase B cipher implementation (B3–B4); ceremony *design* may proceed |
 | **DG-3** | Author | S1 — Whitebox Next Gen licensing (F1) | If the ten F1 tools are in the open split with in-memory signatures → adopt Next Gen; else the **pre-approved legacy-MIT vendor fallback**, no new vetting round | License inventory of the vendored `wbtools_oss` tree; per the directive this is a "stop-and-choose point" | `geobase-sim` scaffolding only (Backlog B-2) — nothing on the 1.0 critical path |
 | **DG-4** | Author | S2 — COPC vault storage (F2) | Lean container-is-artifact (file-backed) per the directive; decide on **measured** blob-vs-file numbers under a real client read pattern | Spike measurements into `DECISIONS.md` | The durable vault-storage decision in Backlog B-4 only — **not** the option-neutral endpoint work in the same item |
@@ -211,7 +219,7 @@ commit that introduces the disagreement.
 
 | Subject | Single source of truth | This plan's role |
 |---|---|---|
-| The 1.0 line / scope | `docs/RELEASE-DEFINITION.md` (after P0.1); until then, this plan's 1.0 Definition + DG-1 | Executes it; must not redefine it |
+| The 1.0 line / scope | `docs/RELEASE-DEFINITION.md` (once its status reads **RATIFIED** — DRAFT does not confer authority); until then, this plan's 1.0 Definition + DG-1 | Executes it; must not redefine it |
 | Phase acceptance status | `docs/ROADMAP.md` (authoritative), mirrored in `docs/PROCESS-MAP.md` §8 | Reports it; never asserts a phase complete that ROADMAP does not |
 | Decisions + rationale | `docs/DECISIONS.md` (append-only, dated) | Cites decisions; DG resolutions land there |
 | Process / component map | `docs/PROCESS-MAP.md` | Points at it for "what runs where" |
@@ -227,8 +235,11 @@ contradict higher ones; when they do, the higher layer wins and the lower is
 corrected in the same session.
 
 **Untracked-doc rule.** No planning document governs work until it is tracked on
-`main`. This plan, `MANIFEST.md`, and the two GEOBASE-* directives are untracked
-today and therefore carry no authority until Phase 0 commits or supersedes them.
+`main`. *(Status 2026-07-11: satisfied by Phase 0 P0.2 — this plan,
+`MANIFEST.md`, `DEPENDENCIES.md`, and the two GEOBASE-* directives are now all
+tracked; the two directives are tracked as SUPERSEDED, with invariant-conflict
+notices, and carry no authority. The rule itself stands for all future
+planning material.)*
 
 **The congruence grep (the standing drift audit).** Before merging any phase
 branch, grep `README.md`, `docs/ROADMAP.md`, and `docs/PROCESS-MAP.md` for
@@ -272,13 +283,16 @@ from re-deriving context.
 1.0 line, commit or supersede the untracked planning docs, fix stale status,
 and repair the dangling verification reference. No product code changes.
 
-**Session kickoff.** Read this plan's `## Plan Congruence` and `## Decision
-Gates`, then `git status` (confirm exactly four untracked planning files:
-`MANIFEST.md`, `PLAN_1.0.md`, `docs/GEOBASE-BUILD-DIRECTIVE.md`,
-`docs/GEOBASE-DIGITAL-TWIN-FEATURES.md`) and `git log -1` (confirm HEAD is
-`b7ad69c` on `main`, level with `origin/main`). Read `README.md` line 75,
-`docs/ROADMAP.md`, and `docs/ARCHITECTURE.md`'s rendering section so the DG-1
-default's basis is fresh before writing `RELEASE-DEFINITION.md`.
+**Session kickoff** *(executed 2026-07-11; preserved with corrections for the
+record — a fresh session resuming Phase 0 should instead confirm the current
+state described in "Tree state" above)*. The original instruction said to
+confirm exactly four untracked planning files at HEAD `b7ad69c`; execution
+found **five** (`DEPENDENCIES.md` was also untracked — recorded in
+`docs/DECISIONS.md` 2026-07-11). All five are now committed; `git status
+--porcelain` should show a clean tree, and HEAD is past `b7ad69c` (docs-only
+Phase 0 commits, unpushed). Read `README.md` § Status, `docs/ROADMAP.md`, and
+`docs/ARCHITECTURE.md`'s rendering section so the DG-1 default's basis is
+fresh before touching `RELEASE-DEFINITION.md`.
 
 **Verification mechanism.** Blocking `ci.yml` stays green (doc-only commits);
 the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
@@ -289,10 +303,19 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
   the final mechanism).
   - *Touches:* `docs/RELEASE-DEFINITION.md` (new); the DG-1 row above;
     `docs/DECISIONS.md` (one dated cross-link line).
-  - *Verify:* `git ls-files docs/RELEASE-DEFINITION.md` prints the path; DG-1
-    marked resolved in this plan.
+  - *Verify:* `docs/RELEASE-DEFINITION.md` status line reads **RATIFIED** with
+    an owner-recorded date, backed by a matching dated `docs/DECISIONS.md`
+    ratification entry; DG-1 marked resolved in this plan. File existence /
+    `git ls-files` is **not** sufficient evidence — a committed DRAFT does not
+    resolve DG-1.
   - *Deps:* none (root of Phase 0).
-- [ ] **P0.2 — Commit or supersede the untracked docs.** `MANIFEST.md`,
+  - **Status 2026-07-11: PARTIALLY EXECUTED — awaiting Patrick.** The draft is
+    written and committed (`docs/RELEASE-DEFINITION.md`, status DRAFT; see
+    `docs/DECISIONS.md` 2026-07-11 "DG-1 draft recorded; ratification
+    pending"). The ratification act itself is reserved to the owner and has
+    not occurred. This box stays unchecked until Patrick records RATIFIED (or
+    an override); Phase 0 therefore remains **open on this item alone**.
+- [x] **P0.2 — Commit or supersede the untracked docs.** `MANIFEST.md`,
   `PLAN_1.0.md`, `docs/GEOBASE-BUILD-DIRECTIVE.md`,
   `docs/GEOBASE-DIGITAL-TWIN-FEATURES.md` each get a status header consistent
   with DG-1 (directive scope = 1.x backlog authority under the default) and are
@@ -301,14 +324,22 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
     superseded.
   - *Verify:* `git status --porcelain` shows no untracked planning material.
   - *Deps:* P0.1 (headers must be DG-1-consistent).
-- [ ] **P0.3 — Fix stale status.** Correct `README.md` "Phase 0.1 — scaffold &
+  - **Executed 2026-07-11** (against the DG-1 *default*, DG-1 itself still
+    pending): all five formerly untracked docs committed (incl.
+    `DEPENDENCIES.md`, the fifth the original count missed); both GEOBASE-*
+    docs carry SUPERSEDED + invariant-conflict banners; `MANIFEST.md` carries
+    a point-in-time status header. See `docs/DECISIONS.md` 2026-07-11.
+- [x] **P0.3 — Fix stale status.** Correct `README.md` "Phase 0.1 — scaffold &
   spine" (line 75) to the true position; make README point at `ROADMAP.md` as
   the status source rather than restating it.
   - *Touches:* `README.md` (§ Status, line 75).
   - *Verify:* congruence grep passes; `README.md` no longer names a specific
     completed phase inline.
   - *Deps:* P0.1.
-- [ ] **P0.4 — Repair the dangling RStep script.** `verify:rstep` in
+  - **Executed 2026-07-11:** README § Status now defers to `docs/ROADMAP.md`
+    and links the DRAFT `docs/RELEASE-DEFINITION.md` (labeled as pending
+    ratification).
+- [x] **P0.4 — Repair the dangling RStep script.** `verify:rstep` in
   `solo/rstep/package.json` points at nonexistent `scripts/verify-rstep.mjs`;
   either remove the script entry until Phase A builds the harness or stub it to
   exit loudly with an honest "not yet built (Phase A)" message.
@@ -317,13 +348,19 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
   - *Verify:* `pnpm --filter @geobase/rstep run verify:rstep` behaves honestly
     (exits non-zero with the "not yet built" message, or the entry is gone).
   - *Deps:* none.
-- [ ] **P0.5 — Record branch discipline + congruence rules.** Add the
+  - **Executed 2026-07-11:** honest stub committed at
+    `solo/rstep/scripts/verify-rstep.mjs` (`package.json` unchanged — it
+    already pointed here); verified locally: exits 1 with the "NOT YET BUILT
+    (Phase A)" message. The stub is not the harness (that is A3-A4).
+- [x] **P0.5 — Record branch discipline + congruence rules.** Add the
   branch/worktree rules, the source-of-truth hierarchy, and the congruence-grep
   procedure to `CONTRIBUTING.md` (tracked today).
   - *Touches:* `CONTRIBUTING.md`; referenced from `docs/RELEASE-DEFINITION.md`.
   - *Verify:* tracked; `RELEASE-DEFINITION.md` links it.
   - *Deps:* P0.1.
-- [ ] **P0.6 — Apply DG-1-consistent wording.** Under the default, tracked
+  - **Executed 2026-07-11:** `CONTRIBUTING.md` § "Branch & congruence
+    discipline" added; `RELEASE-DEFINITION.md` (DRAFT) cross-references it.
+- [x] **P0.6 — Apply DG-1-consistent wording.** Under the default, tracked
   `ROADMAP.md` 2.1 keeps its "optional" heavy-render wording and gains a note
   that the deck.gl direction is recorded backlog authority; if the owner
   overrides DG-1 toward digital-twin-in-1.0, apply the directive's WP0 wording
@@ -334,15 +371,26 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
   - *Verify:* `ROADMAP.md`/`DECISIONS.md`/`ARCHITECTURE.md` no longer contradict
     each other on rendering direction (manual read + grep for `wgpu`/`deck.gl`).
   - *Deps:* P0.1.
-- [ ] **P0.7 — Record DG-5 disposition.** One `DECISIONS.md` line: reorg
+  - **Executed 2026-07-11** (default path; subject to revision if Patrick
+    overrides DG-1): `ROADMAP.md` 2.1 note added; no rendering-direction
+    contradiction among the three docs.
+- [x] **P0.7 — Record DG-5 disposition.** One `DECISIONS.md` line: reorg
   accepted / deferred post-1.0 (default) / rejected.
   - *Touches:* `docs/DECISIONS.md`.
   - *Verify:* tracked; DG-5 row cross-references it.
   - *Deps:* none.
+  - **Executed 2026-07-11:** deferred post-1.0 (the default), recorded in
+    `docs/DECISIONS.md` 2026-07-11; reconfirmed at C8 pre-tag.
 
 **Exit criteria.** All planning material tracked or superseded; no doc-vs-doc
-contradiction on `main`; DG-1 resolved by committed `docs/RELEASE-DEFINITION.md`.
+contradiction on `main`; DG-1 resolved **only by the owner recording RATIFIED**
+in `docs/RELEASE-DEFINITION.md` (plus the matching dated `docs/DECISIONS.md`
+ratification entry) — a committed DRAFT does not meet this criterion.
 **→ M0.**
+
+> **Phase 0 status, 2026-07-11: complete except P0.1 (awaiting Patrick).**
+> P0.2-P0.7 are executed and committed; the exit criteria are unmet on exactly
+> one point — DG-1 ratification. M0 has **not** landed; Phase A may not start.
 
 ### Phase A — Interim export guard + RStep gate harness (build, don't accept)
 
@@ -801,7 +849,7 @@ artifact, or a recorded decision. The **Depends on** column is by milestone ID;
 
 | Milestone | Phase | Exit evidence (command output / committed artifact / recorded decision) | Depends on | Effort |
 |---|---|---|---|---|
-| **M0** — Repo congruence + DG-1 ratified | 0 | `git ls-files docs/RELEASE-DEFINITION.md` prints the path; `git status --porcelain` shows no untracked planning docs; congruence grep across README/ROADMAP/PROCESS-MAP returns no contradiction; `verify:rstep` exits honestly | — | M |
+| **M0** — Repo congruence + DG-1 ratified | 0 | `docs/RELEASE-DEFINITION.md` status line reads **RATIFIED** with an owner date + a matching dated `docs/DECISIONS.md` ratification entry (file existence alone is NOT evidence — the file exists in DRAFT today and M0 has not landed); `git status --porcelain` shows no untracked planning docs; congruence grep across README/ROADMAP/PROCESS-MAP returns no contradiction; `verify:rstep` exits honestly | — | M |
 | **M1** — Interim export guard live | A | `cargo test --workspace --locked` green with new guard tests; export without token → 403 + `export.refused` row (test asserts it) | M0 | S |
 | **M2** — RStep harness runs locally | A | `node solo/rstep/scripts/verify-rstep.mjs` produces a shapefile + ledger rows; clean pass **and** tampered-product fail both asserted | M0 | L |
 | **M3** — `rstep-gate` in CI (informational) | A | `rstep-gate` job green on `main`, labeled provisional-gate; `PROCESS-MAP.md` §8 CI-job cell filled; no acceptance claim anywhere | M2 | S |

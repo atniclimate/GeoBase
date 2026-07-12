@@ -180,7 +180,7 @@ readers to mistake retained research for live direction; mitigated by the
 loud in-file banner on both documents and this entry being the canonical
 cross-reference.
 
-## 2026-07-11 — DG-1 draft ratification recorded (`docs/RELEASE-DEFINITION.md`)
+## 2026-07-11 — DG-1 draft recorded; ratification pending (`docs/RELEASE-DEFINITION.md`)
 
 **Trigger:** `PLAN_1.0.md` P0.1 — DG-1 ("where is the 1.0 line?") requires a
 tracked-commit resolution mechanism, never an untracked note.
@@ -201,3 +201,51 @@ default.
 mistaken for a resolved gate by a future session skimming file existence
 rather than content; mitigated by the file's own top-of-document status
 banner and by this entry stating explicitly that DG-1 is not yet resolved.
+
+## 2026-07-11 — Phase 0 adversarial-review fixes: ratification semantics, T3 invariant notices, plan reconciliation
+
+**Trigger:** Codex adversarial review of the Phase 0 commits
+(`C:\dev\_reviews\geobase\2026-07-11_phase0-close-review.md` — reviewer
+gpt-5.6-sol, range `8c418e5~4..8c418e5`). Verdict: work sound, Phase 0 must
+not be called closed, four defect classes. All four accepted and applied:
+
+1. **Reframe (blocking):** Phase 0 is **"complete except P0.1 (awaiting
+   Patrick)"** — P0.1 per `PLAN_1.0.md` means *ratify*, and the Phase 0 exit
+   criterion + M0 require DG-1 resolved. P0.2-P0.7 checkboxes are checked
+   with dated execution notes; P0.1 stays unchecked. Every "resolved by
+   committing `docs/RELEASE-DEFINITION.md`" formulation (DG-1 row,
+   source-of-truth table, P0.1 verify, exit criteria, M0 evidence) now reads
+   "resolved only when the owner records **RATIFIED**" — file existence is
+   never resolution evidence. This entry's predecessor heading was renamed
+   from "draft ratification recorded" to "draft recorded; ratification
+   pending" to kill the contradictory phrase.
+2. **T3 invariant (blocking):** the retained research docs contained
+   invariant-violating text — `GEOBASE-DIGITAL-TWIN-FEATURES.md` C4 framed
+   the T3 guarantee as a location boundary permitting loopback *serving* of
+   T3, and its F5 defaulted survey data to T2; `GEOBASE-BUILD-DIRECTIVE.md`
+   WP4 concretized a loopback COPC range endpoint over default-T3 ingest
+   with a T3 render gate. `AGENTS.md` invariant 3 forbids serving/networking
+   T3 absolutely — loopback included. Both files now carry an **INVARIANT
+   CONFLICT NOTICE** in the top banner plus inline `VOID` markers above the
+   exact passages: T3 is never served or networked, loopback included; any
+   T3 rendering must be a non-serving in-process path; COPC/range endpoints
+   refuse T3 before opening the artifact; survey data defaults T3, T2 only
+   by explicit sovereign classification act. Research text retained
+   unmodified beneath the markers. A superseded banner alone is not a waiver.
+3. **Release-definition fidelity (major):** `docs/RELEASE-DEFINITION.md`
+   item 1 restored the three omitted acceptance properties from the PLAN
+   default verbatim in force: the shipping cipher is **fail-closed**; **T2
+   export requires a recorded agreement**; the **audit trail is complete**.
+   Still DRAFT.
+4. **Stale-state reconciliation (major):** `PLAN_1.0.md`'s Current
+   Position/kickoff text asserted now-false facts its own commits created
+   (verify-rstep.mjs "does not exist", HEAD `b7ad69c`, "exactly four"
+   untracked docs, README stale) — all reconciled with dated corrections
+   preserving the pre-Phase-0 baseline as history. `MANIFEST.md` gained its
+   P0.2-required top-level status header (dated point-in-time inventory;
+   reorg proposal-only; subordinate to `ROADMAP.md`) and its stale README
+   claim was annotated corrected.
+
+**Standing consequence:** M0 has not landed and Phase A may not start until
+Patrick records RATIFIED (or an override) in `docs/RELEASE-DEFINITION.md` +
+a dated entry here.
