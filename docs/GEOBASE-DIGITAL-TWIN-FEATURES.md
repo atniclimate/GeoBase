@@ -15,6 +15,32 @@
 > native Rust/`wgpu`" wording per the DG-1 default (see `docs/ROADMAP.md` 2.1
 > note, 2026-07-11).
 
+> **INVARIANT CONFLICT NOTICE (blocking — added 2026-07-11).** Beyond being
+> superseded, specific statements in this retained research **contradict
+> `AGENTS.md` invariant 3** ("no code path may export, serve, or network T3
+> data. Anything weakening this is a blocking finding, always") and invariant
+> 2 (unclassified data defaults to T3). Those statements are **VOID** — they
+> must never be implemented as written, at any phase, backlog or not:
+>
+> 1. **VOID — hard constraint C4 below** ("T3 never leaves the node. Any
+>    digital-twin feature that implies serving heavy data serves it only over
+>    the loopback-bound node server."). This restates the T3 guarantee as a
+>    *location* boundary; it is not one. Loopback HTTP is still a
+>    serving/network code path and is forbidden for T3 absolutely —
+>    **loopback included**. The governing rule: **T3 is never served or
+>    networked, over any socket, to any origin.** Any future T3 rendering
+>    must be a non-serving, non-network, in-process path, and any COPC /
+>    range / tile endpoint must refuse T3 **before opening the artifact**
+>    (the shipped refusal-before-open pattern).
+> 2. **VOID — F5's "Survey data is Tribal primary data: default T2"** (Part
+>    2, F5). Survey data defaults **T3** like all unclassified/new primary
+>    data ("when in doubt, classify as T3"). T2 is reached only by an
+>    **explicit sovereign classification act** through the ceremony/audit
+>    path — never as a code or design default.
+>
+> Inline `VOID` markers appear above both passages. The research text is
+> retained unmodified beneath them for the historical record only.
+
 # GeoBase — Digital Twin Candidate Features & Integration Spec
 
 **Status:** Candidate proposals for Claude Code vetting — nothing here is decided.
@@ -48,7 +74,9 @@ existing decision wins unless you explicitly argue for a DECISIONS.md amendment.
 - C3. All data enters through the Ingestor: TSDF tagging, audit record,
   default-T3-if-unclassified. Simulation *outputs* are new datasets and must
   re-enter through the same door.
-- C4. T3 never leaves the node. Any digital-twin feature that implies serving heavy
+- **[VOID — see INVARIANT CONFLICT NOTICE at top. T3 is never served or
+  networked, loopback included; `AGENTS.md` invariant 3 governs.]**
+  C4. T3 never leaves the node. Any digital-twin feature that implies serving heavy
   data serves it only over the loopback-bound node server.
 - C5. No new runtime cloud dependencies. Offline-first is non-negotiable.
 - C6. Nothing from `zymazza/mazzap` (v1) may be copied: **no LICENSE file** in that
@@ -320,6 +348,8 @@ QField/QGIS project scoped to selected layer packages → field crew edits offli
 → zipped project (incl. photos) uploaded to the node → ingest as journaled
 entities with stable UUIDs, idempotent re-upload (unchanged skipped, moved keeps
 identity, retirement explicit via status field, never inferred from absence).
+**[VOID — see INVARIANT CONFLICT NOTICE at top. Survey data defaults T3; T2
+only by an explicit sovereign classification act.]**
 Survey data is Tribal primary data: **default T2**, FPIC ceremony applies on any
 export — this feature is *why* Phase 1.2's ceremony exists, so schedule after 1.2.
 GeoPackage is QField's native format, which makes the export step nearly free for

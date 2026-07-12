@@ -16,6 +16,35 @@
 > "optional native Rust/`wgpu`" wording per the DG-1 default (see
 > `docs/ROADMAP.md` 2.1 note, 2026-07-11).
 
+> **INVARIANT CONFLICT NOTICE (blocking — added 2026-07-11).** Beyond being
+> superseded, this directive concretizes a design that **contradicts
+> `AGENTS.md` invariant 3** ("no code path may export, serve, or network T3
+> data. Anything weakening this is a blocking finding, always"). The
+> conflicting composition is **VOID as written** and must never be
+> implemented, at any phase, backlog or not:
+>
+> - **VOID — WP4 items 1-6 as a composition** (§2, "Node COPC range
+>   endpoint" + `lidar ingest` "default T3" + the point-cloud view consuming
+>   it, with an exit gate rendering a T3 LiDAR layer): a loopback HTTP range
+>   endpoint is still a serving/network code path, and serving default-T3
+>   COPC data over it — behind only an unspecified "tier-check" — violates
+>   the invariant regardless of bind address. The governing rule: **T3 is
+>   never served or networked, loopback included.** Any T3 rendering must be
+>   a non-serving, non-network, in-process path; any COPC/range endpoint must
+>   **refuse T3 before opening the artifact** (the shipped
+>   refusal-before-open pattern), exactly as the existing layers endpoint
+>   refuses T2/T3. A future backlog adoption of WP4 must first redesign the
+>   T3 display path around this rule and record it in `docs/DECISIONS.md`.
+> - **Reaffirmed (correct here; the sibling doc's version is void):** §0
+>   item 8's "Survey data defaults T3; T2 is an explicit act" is the
+>   governing rule; `docs/GEOBASE-DIGITAL-TWIN-FEATURES.md`'s "default T2"
+>   statement for F5 is void.
+>
+> This directive's imperative language ("Ratified decisions", "Order is
+> binding", "Hard constraints") is inoperative — see the SUPERSEDED banner
+> above. An inline `VOID` marker appears at WP4. The text is retained
+> unmodified beneath it for the historical record only.
+
 # GeoBase Digital-Twin Build Directive
 
 **Status:** Response to `digital-twin-vetting.md` (2026-07-06). On Patrick's
@@ -190,6 +219,14 @@ Exit: sim-gate green in CI; an inferential recipe's output provably refuses to
 serve until explicitly classified.
 
 ### WP4 — Phase 2.1 = F2 + F3 (after 2.0 per roadmap; node-side may start early)
+
+**[VOID AS WRITTEN — see INVARIANT CONFLICT NOTICE at top. This work package
+composes a loopback COPC range endpoint over default-T3 ingest with a T3
+render gate; T3 is never served or networked, loopback included (`AGENTS.md`
+invariant 3). Endpoints must refuse T3 before opening the artifact; T3
+rendering requires a non-serving in-process path. Redesign + `DECISIONS.md`
+entry required before any adoption.]**
+
 Order is binding; item 1 is option-agnostic and may start any time after WP3.5:
 1. **Node COPC range endpoint:** tier-check before byte one (layers-endpoint
    shape, `server.rs:321`), loopback-only, `x-geobase-tier` +
