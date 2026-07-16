@@ -156,12 +156,18 @@ struct ServerState {
     sessions: Arc<SessionRegistry>,
 }
 
+/// The enrollment reference of the interim A1 operator identity. Public
+/// so local operator tooling (e.g. the consent-recording example) can
+/// bind agreements to the same identity the route authenticates. B5
+/// replaces this with the enrolled OS-keychain credential.
+pub const INTERIM_OPERATOR_ENROLLMENT: &str = "a1-interim-export-token";
+
 /// The authenticated requester identity for an export authorized through
 /// the interim A1 operator token. B5 replaces this with the enrolled
 /// OS-keychain credential; until then the enrollment reference names the
 /// interim mechanism honestly.
-fn interim_operator_identity() -> ExportIdentity {
-    ExportIdentity::local_operator("a1-interim-export-token")
+pub fn interim_operator_identity() -> ExportIdentity {
+    ExportIdentity::local_operator(INTERIM_OPERATOR_ENROLLMENT)
         .expect("static non-empty enrollment ref")
 }
 

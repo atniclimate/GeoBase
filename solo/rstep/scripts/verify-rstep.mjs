@@ -1,36 +1,43 @@
 #!/usr/bin/env node
-// RStep 1.3d gate harness (Phase A, A3+A4; hardened per review B5/H4/H2/advisories):
-// paint -> export -> product-only shapefile, OBSERVED end to end, re-proven
-// from outside the product.
+// RStep 1.3d gate harness (Phase A, A3+A4; B3 rework: sovereign gate):
+// consent -> session -> paint -> export -> product-only bundle, OBSERVED
+// end to end, re-proven from outside the product.
 //
 //   1. Package the committed capacity+nogo fixture manifests into an isolated
 //      vault with the REAL `geopack` CLI.
-//   2. Boot the real node (examples/node.rs) with exports enabled behind the
+//   2. Record a fixture consent agreement into the node's consent store the
+//      way the LOCAL OPERATOR does (examples/record-consent.rs — recording is
+//      never a network route), covering both fixture packs and binding the
+//      interim A1 operator identity.
+//   3. Boot the real node (examples/node.rs) with exports enabled behind the
 //      A1 operator token (env-injected; tokens never touch stdout or URLs).
-//   3. Drive RStep in Chromium via the REAL UI: click the Draw button, click
-//      map vertices, close the ring with Enter — the operator paint path, not
-//      a synthetic inject() (review B5). Assert exactly one painted feature,
-//      pixel-diff the paint, then fill the panel and click the real Export
-//      button. The painted geometry the oracle checks is whatever
-//      paint.features() actually reports — the product must equal THAT.
-//   4. Re-prove the product with the pyogrio oracle (verify_rstep_oracle.py):
+//      B3: the node composes the SOVEREIGN RecordedConsentGate; the app
+//      begins a node-witnessed export session before loading layers.
+//   4. Drive RStep in Chromium via the REAL UI: click the Draw button, click
+//      map vertices, close the ring with Enter — the operator paint path.
+//      Assert exactly one painted feature, pixel-diff the paint, then click
+//      the real Export button. The painted geometry the oracle checks is
+//      whatever paint.features() actually reports.
+//   5. Re-prove the product with the pyogrio oracle (verify_rstep_oracle.py):
 //      whitelist-only fields, id sequence, score == painted, area_m2 within
-//      tolerance of an independent geodesic area, ZERO source disclosure
-//      (geometry AND attribute values), sidecar values. Verify response
-//      hashes against the files on disk.
-//   5. Read the T3 ledger ONLY through the trusted, assertion-only Rust
+//      tolerance, ZERO source disclosure, sidecar values. Verify response
+//      hashes against the published bundle on disk.
+//   6. Read the T3 ledger ONLY through the trusted, assertion-only Rust
 //      verifier (examples/verify-export-audit.rs — never emits row contents):
-//      export.ceremony + export.t2 rows, actor, basis, token-absence.
-//   6. Negative controls, each asserting the SPECIFIC failure marker: a
-//      tampered product must fail the oracle (ORACLE-FAIL); a sovereign-basis
-//      expectation must fail the ledger verifier (AUDIT-FAIL) against the
-//      provisional gate.
+//      the FULL publication protocol row sequence (intent -> ceremony -> t2
+//      -> published), authenticated actor, sovereign basis, token-absence,
+//      provisional-wording absence.
+//   7. Negative controls, each asserting the SPECIFIC failure marker: a
+//      tampered product must fail the oracle (ORACLE-FAIL); a
+//      PROVISIONAL-basis expectation must fail the ledger verifier
+//      (AUDIT-FAIL) against the sovereign gate — provisional-wording
+//      exclusivity, the inverse of the pre-B3 control.
 //
-// PROVISIONAL-GATE LABEL (acceptance-integrity, PLAN_1.0.md / CONTRIBUTING.md):
-// this harness runs against ProvisionalDevGate and asserts the PROVISIONAL
-// basis verbatim. Green here is ENGINEERING EVIDENCE, NEVER Phase 1.3
-// acceptance. At Phase B's exit (B8) EXPECT_BASIS flips to the sovereign
-// process name (docs/CEREMONY-GATE.md).
+// ACCEPTANCE LABEL (acceptance-integrity, PLAN_1.0.md / CONTRIBUTING.md):
+// since B3 this harness runs against the SOVEREIGN gate and asserts
+// EXPECT_PROCESS and EXPECT_BASIS independently, plus basis != the
+// provisional wording. Green here is ENGINEERING EVIDENCE, NEVER
+// acceptance — the observed acceptance run happens exactly once, at B8.
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -59,6 +66,7 @@ const EXE = process.platform === "win32" ? ".exe" : "";
 const GEOPACK = join(REPO_ROOT, "target", "debug", `geopack${EXE}`);
 const NODE_EXAMPLE = join(REPO_ROOT, "target", "debug", "examples", `node${EXE}`);
 const AUDIT_VERIFIER = join(REPO_ROOT, "target", "debug", "examples", `verify-export-audit${EXE}`);
+const RECORD_CONSENT = join(REPO_ROOT, "target", "debug", "examples", `record-consent${EXE}`);
 const FIXTURES = join(REPO_ROOT, "data", "fixtures", "geopack");
 const TILES = join(REPO_ROOT, "engine-light", "public", "tiles", "terrain");
 const PLACE = join(REPO_ROOT, "place.example.toml");
@@ -72,9 +80,14 @@ const PAINT_FLOOR = 0.001;
 const NOISE_MULTIPLIER = 5;
 const PACKS = ["rstep-capacity-2026", "rstep-nogo-2026"];
 const PRODUCT = "rstep-gate-product";
-const REQUESTER = "rstep-gate-harness";
 const PAINT_SCORE = "0.7";
-const EXPECT_BASIS = "provisional — no sovereign ceremony process ran (Phase 1.2 pending)";
+// B8 asserts process and basis INDEPENDENTLY (docs/CEREMONY-DESIGN.md §8),
+// and that the basis is not the provisional wording. Same bar here.
+const EXPECT_PROCESS = "geobase-recorded-consent-check-v1";
+const EXPECT_BASIS = "active recorded consent evidence matched for T2 derived-product export";
+const PROVISIONAL_BASIS = "provisional — no sovereign ceremony process ran (Phase 1.2 pending)";
+// The authenticated interim A1 operator identity (server.rs; B5 replaces).
+const EXPECT_ACTOR = "local-operator:a1-interim-export-token";
 // Vertices the OPERATOR paints (as map lng/lat). Chosen near camera centre so
 // they project onto the map canvas away from the corner panel, irregular so
 // they cannot coincide with a fixture source polygon. The exact painted
@@ -140,6 +153,10 @@ async function main() {
       "audit verifier (cargo build -p geobase-engine-desktop --example verify-export-audit)",
       AUDIT_VERIFIER,
     ],
+    [
+      "consent recorder (cargo build -p geobase-engine-desktop --example record-consent)",
+      RECORD_CONSENT,
+    ],
     ["capacity manifest (A2 fixtures)", join(FIXTURES, "pkg-capacity.toml")],
     ["nogo manifest (A2 fixtures)", join(FIXTURES, "pkg-nogo.toml")],
     ["T0 tile pyramid", join(TILES, "geobase-baseline.json")],
@@ -164,6 +181,28 @@ async function main() {
     });
     if (result.code !== 0) fail(`geopack package ${pack} failed:\n${result.stderr}`);
   }
+
+  // ------- Record the fixture consent agreement (LOCAL OPERATOR act) -------
+  // B3: the sovereign gate authorizes only against a recorded agreement
+  // covering the node-witnessed source set. Recording happens on the node,
+  // never over the network — this is the operator's tool.
+  const consent = await run(
+    RECORD_CONSENT,
+    [
+      exportsDir,
+      "rstep-gate-agreement-2026",
+      "--source", PACKS[0],
+      "--source", PACKS[1],
+      "--authority", "RStep Gate Fixture Signatory (synthetic)",
+      "--document-ref", "fixtures://rstep-gate-agreement-2026",
+      "--document-sha256", createHash("sha256").update("rstep-gate-agreement-2026").digest("hex"),
+    ],
+    { env: { ...process.env, GEOBASE_DEV_UNENCRYPTED: "1" } },
+  );
+  if (consent.code !== 0 || !consent.stdout.includes("CONSENT-OK")) {
+    fail(`consent recording failed:\n${consent.stdout}\n${consent.stderr}`);
+  }
+  console.log(`[consent] ${consent.stdout.trim()}`);
 
   // ------- Boot the node (exports behind A1 token; dev ledger cipher) -------
   const token = randomBytes(16).toString("hex");
@@ -315,8 +354,9 @@ async function main() {
   }
 
   // ------- The real export flow -------
+  // B3: no requester field — identity is authenticated node-side; the
+  // source set is the node's witnessed session record.
   await page.fill("#rstep-product", PRODUCT);
-  await page.fill("#rstep-requester", REQUESTER);
   const responsePromise = page.waitForResponse(
     (response) => response.url().includes("/api/export") && response.request().method() === "POST",
     { timeout: WAIT_MS },
@@ -340,19 +380,29 @@ async function main() {
   const body = exportResponse.body;
   if (body.tier !== "T2") fail(`product tier ${body.tier} != T2`);
   if (body.features !== 1) fail(`features ${body.features} != 1`);
-  if (body.ceremony?.process !== "provisional-dev") {
-    fail(`ceremony process ${body.ceremony?.process} != provisional-dev (provisional-gate labeled)`);
+  // Process and basis asserted INDEPENDENTLY, plus provisional exclusion
+  // (the B8 bar, docs/CEREMONY-DESIGN.md §8).
+  if (body.ceremony?.process !== EXPECT_PROCESS) {
+    fail(`ceremony process ${JSON.stringify(body.ceremony?.process)} != ${EXPECT_PROCESS}`);
   }
   if (body.ceremony?.basis !== EXPECT_BASIS) {
-    fail(`ceremony basis ${JSON.stringify(body.ceremony?.basis)} != the provisional basis verbatim`);
+    fail(`ceremony basis ${JSON.stringify(body.ceremony?.basis)} != the sovereign basis verbatim`);
   }
+  if (body.ceremony?.basis === PROVISIONAL_BASIS) {
+    fail("ceremony basis is the provisional wording — the sovereign gate must never emit it");
+  }
+  if (typeof body.publication_id !== "string" || body.publication_id === "") {
+    fail("response carries no publication_id (B3 recoverable-publication protocol)");
+  }
+  // B3: the product publishes as a BUNDLE DIRECTORY exports/<product>/.
+  const bundleDir = join(exportsDir, PRODUCT);
   for (const [kind, file] of Object.entries(body.files)) {
-    const onDisk = join(exportsDir, file.name);
-    if (!existsSync(onDisk)) fail(`response names ${file.name} but it is not on disk`);
+    const onDisk = join(bundleDir, file.name);
+    if (!existsSync(onDisk)) fail(`response names ${file.name} but it is not in the bundle`);
     const digest = sha256(onDisk);
     if (digest !== file.sha256) fail(`${kind} sha256 mismatch: disk ${digest} != response ${file.sha256}`);
   }
-  console.log("[export] 200 T2, provisional basis verbatim, all response hashes match disk");
+  console.log("[export] 200 T2, sovereign process+basis verbatim, all response hashes match the published bundle");
 
   // ------- Oracle re-proof + ledger via the trusted (assertion-only) verifier -------
   const paintedJson = join(tmp, "painted.json");
@@ -369,18 +419,24 @@ async function main() {
   ];
   const oracle = await run(
     PYTHON,
-    oracleArgs(join(exportsDir, `${PRODUCT}.shp`), join(exportsDir, `${PRODUCT}.tsdf.json`)),
+    oracleArgs(join(bundleDir, `${PRODUCT}.shp`), join(bundleDir, `${PRODUCT}.tsdf.json`)),
   );
   if (oracle.code !== 0) fail(`oracle failed:\n${oracle.stdout}\n${oracle.stderr}`);
   console.log(`[oracle] ${oracle.stdout.trim()}`);
 
   const audit = await run(AUDIT_VERIFIER, [
     exportsDir, PRODUCT,
+    // The FULL B3 publication protocol, ordered and exhaustive.
+    "--expect-action", "export.intent",
     "--expect-action", "export.ceremony",
     "--expect-action", "export.t2",
-    "--expect-actor", REQUESTER,
-    "--expect-basis-contains", "provisional",
+    "--expect-action", "export.published",
+    "--expect-actor", EXPECT_ACTOR,
+    "--expect-basis-contains", EXPECT_BASIS,
     "--forbid-substring", token,
+    // Provisional-wording exclusivity: the sovereign trail must not
+    // contain the provisional sentence anywhere.
+    "--forbid-substring", PROVISIONAL_BASIS,
   ]);
   if (audit.code !== 0) fail(`audit verifier failed:\n${audit.stdout}\n${audit.stderr}`);
   console.log(`[ledger] ${audit.stdout.trim().split("\n").pop()}`);
@@ -389,7 +445,7 @@ async function main() {
   const tampered = join(tmp, "tampered");
   mkdirSync(tampered, { recursive: true });
   for (const ext of ["shp", "shx", "dbf", "prj", "tsdf.json"]) {
-    copyFileSync(join(exportsDir, `${PRODUCT}.${ext}`), join(tampered, `${PRODUCT}.${ext}`));
+    copyFileSync(join(bundleDir, `${PRODUCT}.${ext}`), join(tampered, `${PRODUCT}.${ext}`));
   }
   const shpBytes = readFileSync(join(tampered, `${PRODUCT}.shp`));
   if (shpBytes.length < 160) fail("tamper target .shp unexpectedly small");
@@ -404,17 +460,19 @@ async function main() {
   }
   console.log("[negative] tampered product refused by the oracle (ORACLE-FAIL)");
 
-  const sovereignCheck = await run(AUDIT_VERIFIER, [
+  // Provisional-wording exclusivity, inverted from the pre-B3 control: a
+  // PROVISIONAL-basis expectation must fail against the sovereign gate.
+  const provisionalCheck = await run(AUDIT_VERIFIER, [
     exportsDir, PRODUCT,
-    "--expect-basis-contains", "sovereign ceremony completed",
+    "--expect-basis-contains", "provisional",
   ]);
-  if (sovereignCheck.code === 0 || !`${sovereignCheck.stdout}${sovereignCheck.stderr}`.includes("AUDIT-FAIL")) {
+  if (provisionalCheck.code === 0 || !`${provisionalCheck.stdout}${provisionalCheck.stderr}`.includes("AUDIT-FAIL")) {
     fail(
-      "NEGATIVE CONTROL FAILED: a sovereign-basis expectation did not fail with AUDIT-FAIL " +
-        `against the provisional gate:\n${sovereignCheck.stderr}`,
+      "NEGATIVE CONTROL FAILED: a provisional-basis expectation did not fail with AUDIT-FAIL " +
+        `against the sovereign gate:\n${provisionalCheck.stderr}`,
     );
   }
-  console.log("[negative] sovereign-basis expectation correctly fails against the provisional gate (AUDIT-FAIL)");
+  console.log("[negative] provisional-basis expectation correctly fails against the sovereign gate (AUDIT-FAIL)");
 
   writeFileSync(
     join(OUT_DIR, "summary.json"),
@@ -424,9 +482,15 @@ async function main() {
         viewport: VIEWPORT,
         ratios,
         painting: "driven through real Draw button + map clicks + Enter",
-        export: { status: exportResponse.status, tier: body.tier, files: body.files },
-        provisionalGate: true,
-        acceptance: "NOT ACCEPTANCE — provisional gate (PLAN_1.0.md A7/B8)",
+        export: {
+          status: exportResponse.status,
+          tier: body.tier,
+          files: body.files,
+          publication_id: body.publication_id,
+        },
+        sovereignGate: true,
+        process: EXPECT_PROCESS,
+        acceptance: "NOT ACCEPTANCE — engineering evidence; the observed acceptance run happens once, at B8 (PLAN_1.0.md)",
       },
       null,
       2,
@@ -434,10 +498,10 @@ async function main() {
   );
 
   console.log(
-    "RSTEP GATE PASSED (provisional-gate labeled): operator painted a polygon, export " +
-      "product-only, zero source disclosure, ledger rows verified, negatives refused. " +
-      "This green is engineering evidence — Phase 1.3 acceptance happens once, at B8, " +
-      "against the sovereign gate.",
+    "RSTEP GATE PASSED (sovereign gate, B3): recorded consent matched, session-witnessed " +
+      "source set, operator painted a polygon, export product-only, zero source disclosure, " +
+      "full publication protocol trail verified, negatives refused. This green is engineering " +
+      "evidence — acceptance happens once, at B8.",
   );
 }
 

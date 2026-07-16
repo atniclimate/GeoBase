@@ -51,6 +51,7 @@ SIDECAR_KEYS = {
     "basis",
     "process",
     "product",
+    "publication_id",  # B3 recoverable-publication protocol
     "features",
     "source_packs",
     "files",
