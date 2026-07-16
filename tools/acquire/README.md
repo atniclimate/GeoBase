@@ -1,15 +1,19 @@
-# tools/acquire — populate a GeoBase node from public federal data (F4)
+# tools/acquire — fetch public federal data for a GeoBase node (F4)
 
-**AOI in → GeoPacks out, in one page.** `tools/acquire` gives a data-poor Tribe
-a populated node from an area-of-interest bounding box, using only public
-federal sources that require no API keys. It is **out-of-product** tooling: it
-is never a product dependency, never a required CI check, and it does not touch
-the product's pure-Rust posture or its runtime network-denial guarantee (Phase
-B B7 — that is about the *product*; this tool is deliberately network-enabled).
+**AOI in → staged public data out, ready to package.** `tools/acquire` helps a
+data-poor Tribe populate a node from an area-of-interest bounding box, using
+only public federal sources that require no API keys. It is **out-of-product**
+tooling: never a product dependency, never a required CI check, and it does not
+touch the product's pure-Rust posture or its runtime network-denial guarantee
+(Phase B B7 — that is about the *product*; this tool is deliberately
+network-enabled).
 
 The seam is a **staging directory**: `acquire` downloads public data into a
-staging dir; `geopack package` ingests that dir through the existing pipeline.
-`acquire` never writes a GeoPackage and never reimplements packaging.
+staging dir; the operator then packages those files into a GeoPack with the
+product CLI (below). `acquire` never writes a GeoPackage and never reimplements
+packaging. It does **not** auto-generate the `pkg.toml` manifest yet — composing
+that (or pairing a DEM with a layer for `geopack ingest`) is the operator's
+step; the acquire→package handoff is deliberately explicit, not magic.
 
 ## Quick start
 
@@ -22,34 +26,45 @@ python -m tools.acquire 3dep-dem --bbox -123.20,47.00,-123.00,47.20 `
     --out .\staging --dry-run
 
 # Real fetch into a staging dir
-python -m tools.acquire 3dep-dem --bbox -123.20,47.00,-123.00,47.20 --out .\staging
+python -m tools.acquire 3dep-dem --bbox=-123.20,47.00,-123.00,47.20 --out .\staging
 
-# Then ingest the staged data with the product CLI (unclassified -> T3)
-cargo run -p geobase-ingestor --bin geopack -- ingest .\staging\USGS_13_n48w124.tif `
-    --out .\data\vault\elevation.gpkg
+# Then package the staged data with the product CLI. geopack ingest pairs a
+# raster + a vector; geopack package consumes an operator-written pkg.toml.
+# (acquire does NOT generate the manifest — that is the operator's step.)
+cargo run -p geobase-ingestor --bin geopack -- ingest `
+    --tif .\staging\USGS_13_n48w124.tif `
+    --shp .\staging\some_layer.shp `
+    --out .\data\vault\baseline.gpkg
+# or, from a manifest you author referencing the staged inputs:
+cargo run -p geobase-ingestor --bin geopack -- package `
+    --manifest .\staging\pkg.toml --out .\data\vault\baseline.gpkg
 ```
 
-`--bbox` is `west,south,east,north` in WGS84. Every request is clipped to the
-AOI; an AOI larger than the safety ceiling is refused before any request.
-
-> **Note:** because a west longitude starts with `-`, pass the bbox with an
-> equals sign so the shell/argparse doesn't read it as a flag:
-> `--bbox=-123.20,47.00,-123.00,47.20`.
+`--bbox` is `west,south,east,north` in WGS84. The AOI bounds the **index
+query**; a source may return whole staged tiles that extend beyond the AOI —
+this tool does **not** clip returned data (clipping/subsetting is an ingest/use
+step). An AOI larger than the safety ceiling is refused before any request.
 
 ## The five safety rules (`safety.py`)
 
 Applied by every fetcher so no source can drift into downloading the country:
 
-1. **advertised-size check** — an index that hides its size is refused (drift
-   signal, not a default).
+1. **advertised-size check** — an index that hides its size, or advertises a
+   non-integer size (`NaN`, a float, a string), is refused.
 2. **free-disk headroom** — the download must leave a margin free.
-3. **refuse-oversized** — hard per-file (2 GiB) and per-job (8 GiB) ceilings.
-4. **clip-to-AOI** — every request is AOI-bounded; a >4 sq-deg AOI is refused.
-5. **discard raw archives** — the staging dir holds usable data, not zips.
+3. **refuse-oversized** — hard per-file (2 GiB) and per-job (8 GiB) ceilings,
+   enforced *during* streaming (to a `.part` file, promoted atomically only on
+   success), so a lying stream cannot exceed them.
+4. **AOI-bounded query** — the AOI bounds the index *query* and a >4 sq-deg AOI
+   is refused; note the tool does **not** clip returned tiles (see above).
+5. **discard raw archives** — the staging dir holds usable data, not zips
+   (suffix check is percent-decoded + fragment-stripped, resisting evasion).
 
 All failures are **loud** (`SafetyError`) — never a silent truncation. Endpoints
 are **config**; a drifted endpoint fails with the probe response body, and the
-tool **never falls back to scraping**. Hosts are **domain-pinned**
+tool **never falls back to scraping** — HTTPS-only, and the domain pin is
+re-validated on every redirect hop and the final response URL. Hosts are
+**domain-pinned**
 (`allowed_hosts` per source in `sources.py`).
 
 ## TSDF tier note

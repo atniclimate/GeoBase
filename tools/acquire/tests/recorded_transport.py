@@ -38,10 +38,14 @@ class RecordedTransport:
         with open(os.path.join(FIXTURES, fixture), encoding="utf-8") as handle:
             return json.load(handle)
 
-    def download(self, url, dest_path, expected_bytes):
+    def download(self, url, dest_path, expected_bytes, hard_max_bytes):
         self._check_host(url)
         self.requested.append(url)
-        payload = self._file_bytes.get(url, b"x" * min(expected_bytes, 1024))
+        payload = self._file_bytes.get(url, b"x" * min(max(expected_bytes, 1), 1024))
+        if len(payload) > hard_max_bytes:
+            from tools.acquire.client import TransportError
+
+            raise TransportError(f"recorded: {url} exceeds hard ceiling {hard_max_bytes}")
         with open(dest_path, "wb") as out:
             out.write(payload)
         return len(payload)

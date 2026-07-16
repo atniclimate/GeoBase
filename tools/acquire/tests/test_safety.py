@@ -13,6 +13,7 @@ from tools.acquire.safety import (
     check_aoi,
     check_job_total,
     is_archive,
+    safe_basename_or_none,
 )
 
 
@@ -48,6 +49,12 @@ class TestSafetyRules(unittest.TestCase):
         with self.assertRaises(SafetyError):
             check_advertised_size("blind", None, self.limits)
 
+    def test_nan_and_non_integer_size_refused(self):
+        # review B2: JSON's default NaN made every comparison false.
+        for bad in (float("nan"), float("inf"), 1.5, "1024", True):
+            with self.assertRaises(SafetyError):
+                check_advertised_size("liar", bad, self.limits)
+
     def test_oversized_file_refused(self):
         with self.assertRaises(SafetyError):
             check_advertised_size("huge", self.limits.max_file_bytes + 1, self.limits)
@@ -63,6 +70,26 @@ class TestSafetyRules(unittest.TestCase):
         self.assertTrue(is_archive("data.zip"))
         self.assertTrue(is_archive("D.TAR.GZ"))
         self.assertFalse(is_archive("dem.tif"))
+
+    def test_archive_detection_resists_evasion(self):
+        # review B4: fragment / percent-encoded / query evasions.
+        self.assertTrue(is_archive("https://h/data.zip#frag"))
+        self.assertTrue(is_archive("https://h/data%2Ezip"))
+        self.assertTrue(is_archive("https://h/path/data.zip?token=x"))
+
+    def test_safe_basename(self):
+        self.assertEqual(safe_basename_or_none("https://h/a/b/dem.tif"), "dem.tif")
+        self.assertEqual(safe_basename_or_none("https://h/dem.tif?q=1"), "dem.tif")
+        # Traversal is NEUTRALIZED to a bare basename (no separator survives, so
+        # the write stays inside staging) — the result is a safe name, not None.
+        self.assertEqual(safe_basename_or_none("https://h/../../etc/passwd"), "passwd")
+        # A percent-encoded separator decodes then basename takes the last
+        # component — still a bare, contained name.
+        self.assertEqual(safe_basename_or_none("https://h/a%2Fb.tif"), "b.tif")
+        # Unsafe: reserved device name, provenance, empty.
+        self.assertIsNone(safe_basename_or_none("https://h/CON.dat"))
+        self.assertIsNone(safe_basename_or_none("https://h/provenance.json"))
+        self.assertIsNone(safe_basename_or_none("https://h/"))
 
 
 if __name__ == "__main__":

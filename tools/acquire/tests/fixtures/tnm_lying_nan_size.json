@@ -1,0 +1,12 @@
+{
+  "_note": "Adversarial fixture (review B2): an index that advertises sizeInBytes as the non-standard JSON token NaN. Python's json accepts NaN by default, which historically made every size comparison false. The safety module must refuse a non-integer size.",
+  "total": 1,
+  "items": [
+    {
+      "title": "lying-nan-tile",
+      "sourceName": "USGS",
+      "downloadURL": "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/liar.tif",
+      "sizeInBytes": NaN
+    }
+  ]
+}

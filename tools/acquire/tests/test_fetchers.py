@@ -83,6 +83,30 @@ class TestFetchIndexSource(unittest.TestCase):
             with self.assertRaises(SafetyError):
                 fetch_index_source("3dep-dem", AOI, staging, _transport(), limits=limits)
 
+    def test_provenance_records_only_contacted_endpoint(self):
+        # review H2: the 3dep-lidar source configures an entwine_index endpoint
+        # that the products fetcher never contacts. Use the DEM source here (one
+        # endpoint) and assert endpoint_contacted names exactly what was hit.
+        with tempfile.TemporaryDirectory() as staging:
+            fetch_index_source("3dep-dem", AOI, staging, _transport(), download=False)
+            with open(os.path.join(staging, "provenance.json"), encoding="utf-8") as handle:
+                prov = json.load(handle)
+            self.assertEqual(prov["endpoint_contacted"], DEM_ENDPOINT)
+            self.assertIn("index query intersecting the AOI", prov["aoi_semantics"])
+            self.assertIn("does NOT enter the GeoPackage", prov["note"])
+            # Actual filenames are recorded, not just titles.
+            self.assertTrue(all(item["filename"] for item in prov["staged_items"]))
+
+    def test_lying_nan_size_refused(self):
+        # review B2: an index item advertising NaN must be refused, not fetched.
+        transport = RecordedTransport(
+            allowed_hosts=DEM.allowed_hosts,
+            json_by_endpoint={DEM_ENDPOINT: "tnm_lying_nan_size.json"},
+        )
+        with tempfile.TemporaryDirectory() as staging:
+            with self.assertRaises(SafetyError):
+                fetch_index_source("3dep-dem", AOI, staging, transport)
+
 
 if __name__ == "__main__":
     unittest.main()

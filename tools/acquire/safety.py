@@ -18,7 +18,10 @@ and lives OUTSIDE the product; it is never a required CI check.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import urllib.parse
 from dataclasses import dataclass
 
 
@@ -91,13 +94,23 @@ def check_aoi(bbox: Bbox, limits: SafetyLimits) -> None:
         )
 
 
-def check_advertised_size(name: str, size_bytes: int | None, limits: SafetyLimits) -> int:
+def check_advertised_size(name: str, size_bytes: object, limits: SafetyLimits) -> int:
     """Rules 1+3: an index that advertises a size must respect the per-file
-    ceiling; an index that advertises NONE is refused (we do not fetch blind)."""
+    ceiling; an index that advertises NONE — or a non-integer (`NaN`, a float,
+    a bool, a string) — is refused. A lying index cannot slip a non-comparable
+    'size' past the ceilings (review B2: JSON's default `NaN` made every
+    comparison false)."""
     if size_bytes is None:
         raise SafetyError(
             f"'{name}' advertises no sizeInBytes — refusing to fetch blind "
             f"(a source that hides its size is a drift signal, not a default)"
+        )
+    # `type(...) is int` deliberately rejects bool (a subclass of int) and any
+    # float, including NaN/inf.
+    if type(size_bytes) is not int:
+        raise SafetyError(
+            f"'{name}' advertises a non-integer sizeInBytes ({size_bytes!r}) — "
+            f"refused (only a plain integer byte count is trusted)"
         )
     if size_bytes < 0:
         raise SafetyError(f"'{name}' advertises a negative sizeInBytes: {size_bytes}")
@@ -131,10 +144,44 @@ def check_disk_headroom(dest_dir: str, needed_bytes: int, limits: SafetyLimits) 
         )
 
 
-ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz", ".7z", ".gz")
+ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz", ".7z", ".gz", ".bz2", ".xz", ".rar")
+
+# Names we never let a server-supplied download claim: the provenance record
+# and any dot/reserved/traversal-ish name. Windows reserved device names too.
+_RESERVED_STEMS = {
+    "provenance",
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def is_archive(filename: str) -> bool:
-    """Rule 5 helper: is this a raw archive to discard after extraction?"""
-    lowered = filename.lower()
+    """Rule 5 helper: is this a raw archive to discard? Percent-decodes and
+    strips any fragment/query first (review B4: `data.zip#x` / `data%2Ezip`
+    evaded a naive suffix check)."""
+    decoded = safe_basename_or_none(filename) or filename
+    lowered = decoded.lower()
     return any(lowered.endswith(suffix) for suffix in ARCHIVE_SUFFIXES)
+
+
+def safe_basename_or_none(url_or_name: str) -> str | None:
+    """Derive a SAFE staging filename from a URL or name (review H1/B4).
+
+    Parses the URL path, percent-decodes it, takes the basename, and requires it
+    to match a portable allowlist. Returns None if the result is unsafe
+    (traversal, reserved/device name, `provenance.json`, empty, too long) — the
+    caller then rejects or synthesizes a name rather than trusting the server.
+    """
+    path = urllib.parse.urlparse(url_or_name).path or url_or_name
+    decoded = urllib.parse.unquote(path)
+    base = os.path.basename(decoded.rstrip("/").replace("\\", "/").split("/")[-1]).strip()
+    if not base or base in {".", ".."}:
+        return None
+    if not _SAFE_NAME.match(base):
+        return None
+    stem = base.split(".")[0].lower()
+    if stem in _RESERVED_STEMS:
+        return None
+    return base

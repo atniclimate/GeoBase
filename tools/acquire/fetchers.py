@@ -33,6 +33,7 @@ from .safety import (
     check_disk_headroom,
     check_job_total,
     is_archive,
+    safe_basename_or_none,
 )
 from .sources import Source, get_source
 
@@ -41,6 +42,9 @@ from .sources import Source, get_source
 class StagedItem:
     name: str
     url: str
+    #: The actual local filename written (review H2: record the real name, not
+    #: just the index title).
+    filename: str
     advertised_bytes: int
     written_bytes: int
 
@@ -111,43 +115,79 @@ def fetch_index_source(
         check_disk_headroom(staging_dir, total, limits)
 
     result = StagedFetch(source_key=source_key, bbox=_bbox_list(bbox), staging_dir=staging_dir)
+    # Per-file HARD ceiling handed to the transport = the advertised size, but
+    # never above the per-file limit (a lying stream is capped either way).
+    used_names: set[str] = set()
     for title, url, size in planned:
-        filename = os.path.basename(url.split("?")[0]) or f"{title}.dat"
-        if is_archive(filename):
+        if is_archive(url):
             # Rule 5: we do not stage raw archives. A source that only offers
             # archives needs an extraction step added deliberately, not a
             # silent zip dropped into the ingest dir.
-            result.skipped_archives.append(filename)
+            result.skipped_archives.append(url)
             continue
+        filename = _unique_safe_name(url, title, used_names)
         dest = os.path.join(staging_dir, filename)
-        written = transport.download(url, dest, size) if download else 0
+        hard_max = min(max(size, 1), limits.max_file_bytes)
+        written = transport.download(url, dest, size, hard_max) if download else 0
         result.items.append(
-            StagedItem(name=title, url=url, advertised_bytes=size, written_bytes=written)
+            StagedItem(name=title, url=url, filename=filename, advertised_bytes=size, written_bytes=written)
         )
 
-    _write_provenance(source, bbox, result)
+    _write_provenance(source, bbox, result, contacted_endpoint=source.endpoints["products"])
     return result
 
 
-def _write_provenance(source: Source, bbox: Bbox, result: StagedFetch) -> None:
-    """Provenance travels with the staged data into ingest (Tier-0 directive:
-    attribution + provenance recorded)."""
+def _unique_safe_name(url: str, title: str, used: set[str]) -> str:
+    """A safe, unique staging filename derived from the URL (review H1/B4). A
+    server-controlled name that is unsafe (traversal, reserved, provenance.json)
+    is replaced by a synthesized one; collisions get a numeric suffix so one
+    download never clobbers another or the provenance record."""
+    base = safe_basename_or_none(url) or f"acquire-{abs(hash(title)) % 10_000_000}.dat"
+    if base == "provenance.json":  # never let a payload overwrite the record
+        base = f"payload-{base}"
+    candidate = base
+    counter = 1
+    while candidate in used:
+        stem, dot, ext = base.partition(".")
+        candidate = f"{stem}-{counter}{dot}{ext}"
+        counter += 1
+    used.add(candidate)
+    return candidate
+
+
+def _write_provenance(
+    source: Source, bbox: Bbox, result: StagedFetch, *, contacted_endpoint: str
+) -> None:
+    """Write the operator-facing provenance record (Tier-0 directive:
+    attribution + provenance recorded). This is a SIDECAR for the operator —
+    the authoritative in-artifact classification is set by the ingestor at
+    ingest time (source hashes, TSDF tier/version, basis in gpkg_metadata);
+    this file does not travel into the artifact, it documents the fetch."""
     provenance = {
         "source_key": source.key,
         "source_name": source.name,
-        "default_tier": source.default_tier,
+        "source_default_tier": source.default_tier,
         "attribution": source.attribution,
         "license": source.license,
         "provenance": source.provenance,
-        "endpoints_used": source.endpoints,
+        # Only the endpoint actually contacted (review H2) — not every
+        # configured endpoint. Configured-but-unused endpoints are separate.
+        "endpoint_contacted": contacted_endpoint,
+        "configured_endpoints": source.endpoints,
         "aoi_bbox_wgs84": _bbox_list(bbox),
+        "aoi_semantics": (
+            "index query intersecting the AOI; returned staged tiles are NOT "
+            "clipped to the AOI by this tool — clipping/subsetting happens at "
+            "ingest/use, not here"
+        ),
         "staged_items": [asdict(item) for item in result.items],
         "skipped_archives": result.skipped_archives,
         "note": (
-            "Fetched by tools/acquire (out-of-product). GeoBase assigns TSDF "
-            "tier at INGEST (unclassified defaults to T3, AGENTS.md §2); the "
-            "source default_tier above is the source posture, not the node "
-            "classification."
+            "Fetched by tools/acquire (out-of-product). This provenance.json is "
+            "an operator-facing sidecar; it does NOT enter the GeoPackage. "
+            "GeoBase assigns the node's TSDF tier at INGEST (unclassified "
+            "defaults to T3, AGENTS.md §2); source_default_tier is the source "
+            "posture, not the node classification."
         ),
     }
     with open(os.path.join(result.staging_dir, "provenance.json"), "w", encoding="utf-8") as out:
