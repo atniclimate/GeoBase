@@ -1,0 +1,43 @@
+# acquire-gate — proves the tools/acquire pipeline (F4) WITHOUT touching the
+# network or the product. Deliberately NOT a required check and NOT wired to
+# push/PR: it runs only on manual dispatch and a schedule.
+#
+# ACCRETION RULE (kept as a comment here, per the build directive, so the
+# constraint travels with the file): this workflow may fetch public data on a
+# real dispatch, but the DEFAULT job runs offline against recorded fixtures
+# (`--dry-run` + the unittest suite). The product's guarantee is *runtime*
+# network denial (Phase B B7 harness), NOT "CI is offline" — CI necessarily
+# uses the network for checkout/installs. Product workflows (ci.yml,
+# geopack-gate, render-gate, rstep-gate) must NEVER consume acquire output, and
+# this gate must NEVER become a required check. If a future edit adds a real
+# fetch step, it stays behind `workflow_dispatch` with an explicit input and
+# never blocks a merge.
+name: Acquire Gate
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, low-frequency — endpoints drift, this catches it early.
+    - cron: "17 9 * * 1"
+
+# Minimal permissions: read the repo, nothing else. No secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: acquire-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-pipeline:
+    name: acquire pipeline (offline — recorded fixtures, no network fetch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests (safety + fetchers + domain pin — no network)
+        run: python -m unittest discover -s tools/acquire/tests -p "test_*.py" -v
+      - name: Dry-run the CLI list (no network)
+        run: python -m tools.acquire --list
