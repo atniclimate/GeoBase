@@ -1,6 +1,6 @@
 > **STATUS: SUPERSEDED / OUT OF SCOPE FOR PRODUCT-1.0** (recorded 2026-07-11,
 > Phase 0 congruence pass; see `docs/DECISIONS.md` 2026-07-11 and
-> `docs/RELEASE-DEFINITION.md`, DRAFT). This directive's rendering/digital-twin
+> `docs/RELEASE-DEFINITION.md`, RATIFIED 2026-07-16). This directive's rendering/digital-twin
 > scope directly contradicts tracked `docs/ARCHITECTURE.md`, which rules a
 > native heavy-render path "a **deferred Phase 2.1 option**, not a v1
 > requirement" (`docs/ARCHITECTURE.md`, "Rendering decision"). Under DG-1's
