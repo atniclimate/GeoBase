@@ -1832,6 +1832,106 @@ mod tests {
         );
     }
 
+    /// Review B3 F1: a pack reclassified UP while the node runs (a
+    /// table-scope T3 tag added after creation raises the artifact's
+    /// effective tier) is refused at export — the pipeline re-resolves the
+    /// tier from disk, not from a cached hint.
+    #[test]
+    fn stale_tier_reclassified_pack_is_refused() {
+        let dir = temp_dir("stale");
+        let exports = dir.join("exports");
+        // Created and tagged T1.
+        let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
+        // Reclassify UP: add a table-scope T3 tag so the geopackage
+        // roll-up tier becomes T3 (most-restrictive-wins).
+        {
+            let gpkg = GeoPackage::open(source.path.as_ref().unwrap()).unwrap();
+            gpkg.write_tsdf_tag(&geobase_gpkg::TsdfTag {
+                table: None, // geopackage-scope reclassification, raised to T3
+                tier: Tier::T3,
+                tsdf_version: "0.9.4".into(),
+                tsdf_source_origin: "vendored:test".into(),
+                classified_by: "reclassification".into(),
+                extras: {
+                    let mut m = serde_json::Map::new();
+                    m.insert(
+                        "classification_basis".into(),
+                        serde_json::json!("raised to sovereign"),
+                    );
+                    m
+                },
+            })
+            .unwrap();
+        }
+        // The caller still passes the STALE T1 hint — but re-resolution
+        // reads T3 and the floor refuses.
+        let err = export_product(
+            &ProvisionalDevGate,
+            &dev_cipher(),
+            &exports,
+            &request("blocked", vec![square((0.0, 0.0), 0.001)]),
+            std::slice::from_ref(&source),
+            &operator(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ExportError::Refused(_)));
+        assert!(err.to_string().contains("never leaves the node"));
+        assert!(!exports.join("blocked").exists());
+    }
+
+    /// Review B3 F1: a witnessed pack whose artifact no longer resolves
+    /// (path missing) is T3 and refused — never silently downgraded.
+    #[test]
+    fn unresolvable_source_is_t3_and_refused() {
+        let dir = temp_dir("unresolvable");
+        let exports = dir.join("exports");
+        let ghost = SourcePack {
+            id: "ghost".into(),
+            path: None,     // no artifact
+            tier: Tier::T0, // stale hint ignored
+        };
+        let err = export_product(
+            &ProvisionalDevGate,
+            &dev_cipher(),
+            &exports,
+            &request("blocked", vec![square((0.0, 0.0), 0.001)]),
+            &[ghost],
+            &operator(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ExportError::Refused(_)));
+        assert!(err.to_string().contains("never leaves the node"));
+    }
+
+    /// Review B3 F9: on the authorized path `observed_at` on the sealed
+    /// ceremony row equals the instant the record carries (the one the
+    /// authorization used) — the trail proves WHICH time decided.
+    #[test]
+    fn observed_at_on_ceremony_row_equals_the_record_instant() {
+        let dir = temp_dir("observed");
+        let exports = dir.join("exports");
+        let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
+        let outcome = export_product(
+            &ProvisionalDevGate,
+            &dev_cipher(),
+            &exports,
+            &request("obs", vec![square((0.0, 0.0), 0.001)]),
+            std::slice::from_ref(&source),
+            &operator(),
+        )
+        .unwrap();
+        let trail = trail(&exports);
+        let ceremony = trail
+            .iter()
+            .find(|r| r.action == "export.ceremony")
+            .unwrap();
+        assert_eq!(
+            ceremony.details["observed_at"].as_str().unwrap(),
+            outcome.ceremony.observed_at.to_rfc3339(),
+            "the row's observed_at must equal the instant the record used"
+        );
+    }
+
     // === PUBLICATION FAILURE INJECTION (design §6 — every crash point) ===
 
     fn crash_at(exports: &Path, dir: &Path, product: &str, crash: CrashPoint) -> ExportError {
@@ -1945,5 +2045,32 @@ mod tests {
             !exports.join("p5").exists(),
             "a bundle whose hashes do not match the seal must never publish"
         );
+    }
+
+    /// Review B3 F4: an EXTRA (unsealed) file in the staged bundle — even
+    /// one carrying sovereign data — must abort recovery, never ride along
+    /// into a published bundle. The subset-only check this replaces would
+    /// have published it.
+    #[test]
+    fn recovery_aborts_a_bundle_with_an_extra_unsealed_file() {
+        let dir = temp_dir("crash-extra");
+        let exports = dir.join("exports");
+        let err = crash_at(&exports, &dir, "p6", CrashPoint::Prepared);
+        assert!(matches!(err, ExportError::SimulatedCrash("prepared")));
+        // Drop an extra file next to the sealed set (e.g. a leaked source).
+        let staging_root = exports.join(STAGING_DIR);
+        let staged = std::fs::read_dir(&staging_root)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        std::fs::write(staged.path().join("leaked-source.gpkg"), b"T3 bytes").unwrap();
+        let actions = recover_publications(&dev_cipher(), &exports).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(
+            matches!(actions[0], RecoveryAction::Aborted { .. }),
+            "an extra unsealed file must abort recovery"
+        );
+        assert!(!exports.join("p6").exists());
     }
 }

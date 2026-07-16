@@ -189,13 +189,19 @@ async function main() {
   const consent = await run(
     RECORD_CONSENT,
     [
+      "record",
       exportsDir,
       "rstep-gate-agreement-2026",
+      "--kind", "signed",
       "--source", PACKS[0],
       "--source", PACKS[1],
       "--authority", "RStep Gate Fixture Signatory (synthetic)",
+      "--product-class", "painted-opportunity-shapefile",
       "--document-ref", "fixtures://rstep-gate-agreement-2026",
       "--document-sha256", createHash("sha256").update("rstep-gate-agreement-2026").digest("hex"),
+      // The real acknowledgment instant (never defaulted to now); fixed so
+      // the gate is deterministic.
+      "--acknowledged-at", "2026-07-15T00:00:00Z",
     ],
     { env: { ...process.env, GEOBASE_DEV_UNENCRYPTED: "1" } },
   );
@@ -432,7 +438,10 @@ async function main() {
     "--expect-action", "export.t2",
     "--expect-action", "export.published",
     "--expect-actor", EXPECT_ACTOR,
-    "--expect-basis-contains", EXPECT_BASIS,
+    // Exact process AND basis on the PERSISTED ceremony row (the B8 bar,
+    // asserted independently — review B3 F9), not merely a substring.
+    "--expect-process", EXPECT_PROCESS,
+    "--expect-basis", EXPECT_BASIS,
     "--forbid-substring", token,
     // Provisional-wording exclusivity: the sovereign trail must not
     // contain the provisional sentence anywhere.

@@ -184,8 +184,15 @@ export class NodeClient {
    * from; without a session no export can be authorized.
    */
   async beginSession(): Promise<string> {
+    // Issuance requires the operator token (the session is operator-bound,
+    // review B3 F2) — sent here and on export, never on read endpoints.
+    const headers: Record<string, string> = {};
+    if (this.exportToken !== undefined) {
+      headers["x-geobase-export-token"] = this.exportToken;
+    }
     const body = await this.requestObject<{ session: string }>("/api/sessions", {
       method: "POST",
+      headers,
     });
     if (typeof body.session !== "string" || body.session === "") {
       throw new Error("node did not return a session id");

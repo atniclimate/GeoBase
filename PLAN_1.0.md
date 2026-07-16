@@ -649,12 +649,23 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     §10 linearization (revalidate at publication point), constants §8.
     Harness/SDK/oracle/audit-verifier updated same branch (sovereign
     assertions, the B8 bar; rstep-gate label: green ≠ acceptance);
-    `record-consent` example = the LocalOperator recording path. Both
-    CONTRACT TESTs green against the sovereign gate; ProvisionalDevGate
-    grep-proven test-only. NOTE: the B8 row's "assertion flip" in
-    `verify-rstep.mjs` happened HERE by necessity (the sovereign gate is
-    composed, so provisional assertions would be false) — B8 remains the
-    single observed acceptance run + ROADMAP/PROCESS-MAP flip.
+    `record-consent` example = the LocalOperator lifecycle tool
+    (record/revoke/supersede/correct). Both CONTRACT TESTs green against
+    the sovereign gate; **`ProvisionalDevGate` is feature-gated
+    (`geobase-gpkg/test-support`) so it is not compiled into any release
+    build** — a `cargo build --workspace` excludes it entirely. NOTE: the
+    B8 row's harness assertions happened HERE by necessity (the sovereign
+    gate is composed, so provisional assertions would be false) — the
+    single acceptance act at B8 is the ROADMAP/PROCESS-MAP flip commit, not
+    a code change (see the B8 item).
+    **Adversarial review:** Codex returned BLOCK on the first pass
+    (`C:\dev\_reviews\geobase\2026-07-16_b3-implementation-review.md`, 10
+    findings); all resolved on-branch (F1 fresh-tier + capability boundary,
+    F2 operator-bound single-use sessions + serve-required, F3 snapshot
+    txn + publication-point sequence, F4 recovery pair-integrity +
+    extra-file rejection, F5 SQL insert triggers, F6 taxonomy, F7
+    matching + CLI, F8 witness proof hash, F9 exact process/basis +
+    negative controls, F10 hygiene), re-review pending.
 - [ ] **B4 — Real `AtRestCipher`.** Implement the DG-2 choice behind the
   fail-closed seam; every T3-producing write path (export ledger, future
   sim/LiDAR outputs) routes through it; remove `GEOBASE_DEV_UNENCRYPTED` or
@@ -716,19 +727,27 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     tests); `.github/workflows/` wiring.
   - *Verify:* harness green locally and in CI.
   - *Deps:* B3 (needs the real serving path composed).
-- [ ] **B8 — Combined acceptance run (M5).** Re-run `rstep-gate` against the
-  sovereign gate; the harness asserts the ceremony record names the sovereign
-  process and the provisional basis appears nowhere. Flip `ROADMAP.md` 1.2 and
-  1.3 to accepted-complete and update `PROCESS-MAP.md` §8 **in this one commit**,
-  with gate evidence attached.
-  - *Touches:* `solo/rstep/scripts/verify-rstep.mjs` (assertion flip from
-    `PROVISIONAL_BASIS` to the sovereign process name); `docs/ROADMAP.md` (1.2 +
-    1.3 rows/detail); `docs/PROCESS-MAP.md` §8; a committed evidence capture
-    under `docs/verification/`.
+- [ ] **B8 — Combined acceptance run (M5).**
+  **The single acceptance act is mechanically defined (review B3 F9):**
+  the harness's sovereign assertions (`EXPECT_PROCESS`/`EXPECT_BASIS`
+  independent, provisional-wording excluded) already landed at B3 by
+  necessity — the sovereign gate is composed, so provisional assertions
+  would be false. B8 does **not** re-flip any assertion. B8's acceptance
+  act is exactly ONE commit that (a) flips `docs/ROADMAP.md` 1.2 and 1.3
+  to accepted-complete, (b) updates `docs/PROCESS-MAP.md` §8's acceptance
+  status, and (c) commits a fresh gate-evidence capture under
+  `docs/verification/` — performed only after B4/B4b/B5/B6/B7 are all
+  green, so acceptance certifies the *complete* mechanism, not just the
+  ceremony. **Until that commit exists, 1.2/1.3 are not accepted, no
+  matter how many green `rstep-gate` runs precede it.** That commit is
+  the one observed acceptance run.
+  - *Touches:* `docs/ROADMAP.md` (1.2 + 1.3 rows/detail); `docs/PROCESS-MAP.md`
+    §8; a committed evidence capture under `docs/verification/`. (The
+    `verify-rstep.mjs` assertions are already sovereign — no code flip at B8.)
   - *Verify:* CI green (including `rstep-gate` asserting the sovereign record —
     `EXPECT_PROCESS` and `EXPECT_BASIS` asserted independently, and
     `basis != PROVISIONAL_BASIS`);
-    congruence grep; acceptance recorded exactly once.
+    congruence grep; acceptance recorded exactly once (the ROADMAP flip).
   - *Deps:* B3, B4, B4b, B5, B6, B7, A5 (the harness/job to re-run).
 
 **Exit criteria.** T3 provably non-exportable and non-networkable under

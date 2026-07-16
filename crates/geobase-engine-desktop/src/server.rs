@@ -1650,6 +1650,112 @@ mod tests {
         assert!(!exports.join("infra-blocked").exists(), "no product bytes");
     }
 
+    /// Review B3 F2/F9: the session-substitution / omitted-pack attack.
+    /// A client serves a T1 pack in session A, then exports naming a
+    /// DIFFERENT, freshly-minted session B that witnessed nothing. The
+    /// export source set is session B's record (empty) → T3 floor → 403,
+    /// no product. The pack fetched in A cannot be smuggled through B.
+    /// Also proves the serve-required rule: fetching feature data WITHOUT
+    /// a session on an export-enabled node is refused.
+    #[tokio::test]
+    async fn session_substitution_and_serveless_fetch_are_refused() {
+        let entry = create_pack("subst-t1.gpkg", Some(Tier::T1));
+        let id = entry.id.clone();
+        let exports = temp_path("subst-exports");
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("subst-token".into()),
+                ..ServerConfig::default()
+            },
+        );
+        let new_session = || {
+            let app = app.clone();
+            async move {
+                let r = app
+                    .oneshot(
+                        Request::post("/api/sessions")
+                            .header(header::HOST, "127.0.0.1")
+                            .header(EXPORT_TOKEN_HEADER, "subst-token")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                json_response(r).await["session"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }
+        };
+
+        // Serve-required: fetch WITHOUT a session on an export node → 403.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "an export-capable node must require a session on source-data serves"
+        );
+
+        // Session A witnesses the T1 pack.
+        let session_a = new_session().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(crate::session::SESSION_HEADER, session_a.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Export names a DIFFERENT empty session B → empty source set → T3
+        // floor → 403. The A-witnessed pack is not smuggled through B.
+        let session_b = new_session().await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/export")
+                    .header("content-type", "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "subst-token")
+                    .body(Body::from(
+                        json!({
+                            "product": "smuggled",
+                            "session": session_b,
+                            "features": [{
+                                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
+                                "score": 1.0
+                            }]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let reason = json_response(response).await["reason"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(reason.contains("never leaves the node"), "{reason}");
+        assert!(!exports.join("smuggled").exists());
+    }
+
     /// [EGRESS-GATE A5] The T3 export ledger AND the T3 consent store are
     /// never catalogued — enforced by name, not merely by living in a
     /// separate directory. Even placed INSIDE the vault (a
