@@ -249,3 +249,46 @@ not be called closed, four defect classes. All four accepted and applied:
 **Standing consequence:** M0 has not landed and Phase A may not start until
 Patrick records RATIFIED (or an override) in `docs/RELEASE-DEFINITION.md` +
 a dated entry here.
+
+## 2026-07-16 — Owner overnight-build directive: execute engineering under the DG-1 default; Codex granted full repo access
+
+**Trigger:** owner session directive (Patrick Freeland, 2026-07-16, direct
+instruction to Claude Code): attempt a one-shot overnight build on the
+established design; Codex (gpt-5.6-sol via CLI) as a full partner with full
+read/write privileges in this repository; adversarial Codex review after each
+major milestone; all data sources and codebase in use for this build are
+declared **Tier 0** with attribution + provenance required in documentation;
+build first, licensing addressed afterwards; run autonomously overnight with
+owner review in the morning.
+
+**Interpretation (recorded so scope is a decision, not an inference):**
+
+1. **Sequencing interruption, not ratification.** This directive is a
+   deliberate, recorded owner interruption of `PLAN_1.0.md`'s sequencing rule
+   that Phase A awaits M0 — engineering execution proceeds tonight under the
+   DG-1 *default* (sovereignty-core). It is **not** a DG-1 ratification:
+   `docs/RELEASE-DEFINITION.md` remains DRAFT, its ratification record remains
+   empty, and P0.1 remains open for Patrick. The plan's own Backlog Queue rule
+   contemplates exactly this mechanism ("deliberate, recorded interruption").
+2. **Nothing owner-reserved is exercised tonight.** No acceptance flips
+   (`ROADMAP.md` 1.2/1.3 stay not-accepted; the acceptance-integrity rule is
+   fully honored; the RStep harness runs against `ProvisionalDevGate` and is
+   labeled as such); no ceremony-mechanism decision (B2 is prepared as a DRAFT
+   proposal only); no classification acts; no pushes to the public remote —
+   all commits stay local for morning review.
+3. **Scope executed tonight, in order:** Phase A (A1–A7); Phase B engineering
+   that is not owner-reserved (B1 spike evidence, B4 per the DG-2 default
+   behind the fail-closed seam, B5 requester-auth machinery, B6/B7 proof
+   suites); release-hardening engineering (C3 notices/license audit, C4, C5);
+   and owner-directed early entry into Backlog B-1 (`tools/acquire`) plus the
+   DG-3 S1 spike.
+4. **Codex data-gate change:** see `AGENTS.md` § Data gate (dated grant).
+   Basis: the owner's declaration that all material in use for this build is
+   Tier 0. The adversary-profile deny-by-default review rules are unchanged.
+
+**Strongest surviving objection:** executing Phase A before DG-1 ratification
+risks wasted work if Patrick overrides DG-1 toward a different 1.0 line;
+accepted because the owner directed the build explicitly, everything executed
+is on every candidate 1.0 line's critical path (the RStep gate harness, the
+egress proofs, the cipher), and no acceptance or ratification act is
+simulated.

@@ -65,8 +65,16 @@ Claude (the director) is the final decider; review is input, not veto.
 
 - **Green**: tracked repo content (code, specs, docs, committed synthetic
   fixtures), diffs of tracked content, build/test output.
-- **Red — never read, pipe, or summarize**: anything gitignored, including
-  `docs/_local/`, `docs/handoffs/`, `data/` beyond committed fixtures; any
-  real-world dataset anywhere on this machine; anything outside this
-  repository. These can carry sovereignty-restricted context. When in
-  doubt, treat as red — the TSDF default posture applies to context, too.
+- **Owner grant (2026-07-16, Patrick Freeland; recorded in
+  `docs/DECISIONS.md` same date):** for work in this repository, Codex has
+  **full read/write access to the entire repo working tree**, including the
+  gitignored planning material (`docs/handoffs/`, `docs/_local/`, `data/`
+  staging). Basis: owner declaration that all material in use for this build
+  is Tier 0 under the TSDF. This grant is deliberately loud so no inherited
+  instruction quietly narrows it.
+- **Red — still never read, pipe, or summarize**: any real-world dataset
+  outside this repository, credentials or secrets anywhere, anything outside
+  `C:\dev`. Never push to remotes. When in doubt, treat as red — the TSDF
+  default posture applies to context, too. The adversary-profile
+  deny-by-default review rules (`C:\dev\AGENTS.md`) continue to bind review
+  jobs regardless of this grant.
