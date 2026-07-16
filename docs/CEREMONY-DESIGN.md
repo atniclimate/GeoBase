@@ -5,9 +5,10 @@
 > against. It resolves `PLAN_1.0.md` **B2** and supersedes the DRAFT
 > `docs/CEREMONY-DESIGN-PROPOSAL.md` (retained as decision-support history).
 > Every decision here was made by the owner at the 2026-07-16 sitting,
-> recorded in `docs/DECISIONS.md` (same date), after an adversarial design
-> review (`_reviews/geobase/2026-07-16_b2-decision-options-review.md`) whose
-> blocking findings shaped §4, §5.3, and §6.
+> recorded in `docs/DECISIONS.md` (same date, which also cites the
+> adversarial design review whose blocking findings shaped §4, §5.1, §5.3,
+> and §6 — review references live in the decision log, not here; this
+> document stands on its normative content).
 >
 > **This document designs the mechanism. It does not accept anything.**
 > `ProvisionalDevGate` remains the only composed gate until B3 lands, and
@@ -107,14 +108,17 @@ pub struct FpicAuthorization {
 
 Type-floor honesty (recorded so no one overclaims): `FpicAuthorization`
 carries no `source_tier`; the T3 floor's **source half** is enforced by the
-gate on `ExportAuthorization.source_tier` (§5.1) and proven by the
-floor-first precedence test (§11). The type makes a T3 *target*
+gate on the **node-derived effective source tier** (§5.1 steps 1–2 —
+`ExportAuthorization.source_tier` stops being an independently trusted
+input at B3; the gate consumes only session-derived provenance) and proven
+by the floor-first precedence test (§11). The type makes a T3 *target*
 unconstructible; it does not by itself prove the source floor.
 
 ### 2.4 `CeremonyRecord` (breaking change at B3, recorded)
 
 `CeremonyRecord` gains: `authority_of_record` (§2.3), typed `Conditions`
-(§2.5), and `consent_store_sequence` (§10). The free-text `requester` on
+(§2.5), `observed_at` (§2.5 — the node-clock UTC instant the authorization
+actually used), and `consent_store_sequence` (§10). The free-text `requester` on
 `ExportAuthorization` and the free-text `conditions: Vec<String>` are
 **REPLACED, not extended** — one deliberate breaking seam change at B3,
 with the harness and the trusted ledger reader updated in the same phase
@@ -138,15 +142,23 @@ pub struct Conditions {
 `Declined`, refusal row, no product). Geography and purpose are
 **recorded-but-advisory** in 1.0. Export-time comparison uses the node's
 UTC clock; an invalid or unavailable clock is an **infrastructure failure**
-(§5.3), never an authorization.
+(§5.3), never an authorization. **The exact node-clock instant used for
+the expiry comparison is recorded**: it is `FpicAuthorization.timestamp`,
+copied into `CeremonyRecord.observed_at` and thence into the
+`export.ceremony` row — the audit trail proves *which time* made the
+decision, not merely that a decision was made (asserted by the expiry
+tests, §11).
 
 ## 3. The consent store
 
 A **separate local T3 GPKG artifact** alongside the export ledger: its own
 reserved name, append-only-by-trigger, artifact-level TSDF tags
 (`gpkg_metadata`), excluded by construction from catalog scans,
-file-serving, export, backup/sync and every network route, and sealed by
-the DG-2 envelope when B4 lands. It is the system of record for agreement
+file-serving, export, every **automatic or network backup/sync
+integration**, and every network route, and sealed by the DG-2 envelope
+when B4 lands. The **sole permitted copy path** is the owner-directed
+offline backup of the sealed, closed artifact defined in §9 — the
+exclusion and §9 are one rule, not a contradiction. It is the system of record for agreement
 **status, matching, and revocation**; the ledger row is self-contained for
 **evidence** (§2.2).
 
@@ -208,10 +220,22 @@ omit a contributing higher-tier pack. **B3 closes this:**
 
 ### 5.1 Order (each step fail-closed)
 
-1. **T3 floor first** — `source_tier == T3 || product_tier == T3` →
-   `TierNeverExports`, before authentication and before any store access
-   (proven by the floor-first precedence test, §11).
-2. **Resolve the session** (§4) — invalid/absent → refuse.
+1. **Resolve the session and derive the authoritative tiers** (§4) —
+   invalid/absent session → refuse. The node re-resolves **every pack its
+   session record accumulated** against the catalog; the effective source
+   tier is the maximum across that set, with missing/unclassifiable packs
+   resolving to T3. This step touches neither the consent store nor any
+   product write, and nothing requester-supplied can add to, subtract
+   from, or downgrade the result. **The floor cannot run before this step,
+   because before it the node does not know the true source tier** — a
+   floor evaluated on a claimed tier is the T3-omission bypass this design
+   exists to close.
+2. **T3 floor** — node-derived `effective_source_tier == T3 ||
+   product_tier == T3` → `TierNeverExports`, **before authentication and
+   before any consent-store access** (proven by the floor-first precedence
+   test, §11, whose floor input is required to be the session-derived
+   tier). `ExportAuthorization.source_tier` ceases to be an independently
+   trusted input at B3: the gate consumes only the node-derived value.
 3. **Authenticate** the requester (§7) — else `Declined`, generic
    attribution, refusal row.
 4. **Match** (§5.2) — expiry filtering happens **before** multiplicity
@@ -356,10 +380,17 @@ Gate contract tests (in addition to the two shipped CONTRACT TESTS, which
 must pass against the sovereign gate):
 
 - **★ Floor-first precedence** (decisive): with a fully valid active T2
-  agreement AND an authenticated requester present, submit (T3 source, T2
-  product) and (low source, T3 product); assert `TierNeverExports`, assert
-  the store was **never consulted** (store spy, zero reads), and assert at
-  the HTTP boundary no product bytes exist.
+  agreement AND an authenticated requester present, drive a session whose
+  **node-witnessed** source set is (T3 source, T2 product) and one that is
+  (low source, T3 product); assert `TierNeverExports`, assert the consent
+  store was **never consulted** (store spy, zero reads), and assert at the
+  HTTP boundary no product bytes exist. **The floor input must be the
+  session-derived effective tier — a test that injects `source_tier`
+  directly proves nothing about this design.**
+- **★ Omitted-pack floor test** (the bypass this design closes): the
+  request claims/declares only low-tier input while the node's session
+  record contains a T3 pack; assert `TierNeverExports`, zero consent-store
+  reads, zero product bytes.
 - No / expired / revoked / superseded / wrong-scope / wrong-requester
   agreement → `Declined` + row, no product. Revoked-lineage-head → refused
   with **no ancestor fallback** (test it explicitly).
@@ -379,7 +410,10 @@ must pass against the sovereign gate):
   separately.
 - Positive paths: both consent kinds authorize; `authorized_by` is the
   authenticated identity; `authority_of_record` equals the store record's
-  authority; conditions carried; consent-store sequence recorded.
+  authority; conditions carried; consent-store sequence recorded;
+  `observed_at` present and equal to the instant the expiry comparison
+  used (the expiry tests assert this on both the authorized and the
+  expired-refusal paths).
 
 Publication failure injection (§6): crash at every state transition;
 recovery finalizes or aborts truthfully; success response only after
@@ -393,5 +427,7 @@ finalization; exactly one `export.ceremony` + one `export.t2` per export.
   at B8, against the real mechanism (`docs/RELEASE-DEFINITION.md`).
 - It does not implement the cipher — that is B4/B4b behind the confirmed
   DG-2 choice.
-- It contains no real names, agreements, hashes of real documents, witness
-  data, tokens, or key material — and never will.
+- It contains no consent content: no real agreement parties, agreements,
+  hashes of real documents, witness data, tokens, or key material — and
+  never will. (The owner's name appears above solely as the ratifying
+  authority — a governance record, not consent content.)

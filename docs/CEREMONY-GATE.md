@@ -5,10 +5,11 @@ trait every export authorization passes through, plus `ProvisionalDevGate`,
 the only implementation until Phase 1.2. This note lists exactly what 1.2
 must implement against the trait. The ceremony *mechanism* — the sovereign
 process itself — is deliberately not designed here; that was 1.2's work and
-authority, and **it is now done**: the owner-ratified mechanism is
-`docs/CEREMONY-DESIGN.md` (2026-07-16), which B3–B5 implement. Where this
-handoff note and that design differ, the design of record wins (clauses 2
-and 5 below are amended by it).
+authority. **The mechanism design is now ratified**
+(`docs/CEREMONY-DESIGN.md`, 2026-07-16) — **implementation remains B3–B5
+and has not begun**; nothing sovereign is composed yet. Where this handoff
+note and that design differ, the design of record wins (clauses 2 and 5
+below are amended by it).
 
 ## The seam as shipped (Phase 1.3)
 

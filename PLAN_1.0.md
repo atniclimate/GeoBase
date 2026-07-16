@@ -1,6 +1,8 @@
 # GeoBase — Plan to 1.0
 
-**v0.2 — draft; DG-1 (the 1.0 line) pending owner ratification.** *(Corrected
+**v0.3 — DG-1 RATIFIED 2026-07-16; the 1.0 line is owner-ratified and this
+plan executes it** (`docs/RELEASE-DEFINITION.md`, RATIFIED; `docs/DECISIONS.md`
+2026-07-16). *(History: v0.2 was the draft pending ratification. Corrected
 2026-07-11, Phase 0 congruence pass: this document previously carried a stray
 "v1.0 — final (Phase 4 expansion complete)" header inconsistent with an
 unrelated template, which flatly contradicted this document's own body — DG-1
@@ -20,8 +22,10 @@ place; see `docs/DECISIONS.md` 2026-07-11.)*
 ## 1.0 Definition
 
 **Product-1.0 is the sovereignty core, accepted once against the real
-sovereign mechanism, packaged and defensible.** This is the v0.2 default,
-pending owner ratification at DG-1. It replaces v0.1's inferred
+sovereign mechanism, packaged and defensible.** This was the v0.2 default and
+is now the **owner-ratified line** (DG-1, 2026-07-16 —
+`docs/RELEASE-DEFINITION.md` is the authoritative home; this plan executes
+it). It replaces v0.1's inferred
 "roadmap-through-2.2 plus digital-twin scope" definition, which adversarial
 review found unsupported: the deck.gl/digital-twin expansion exists only in
 **untracked** docs (`docs/GEOBASE-BUILD-DIRECTIVE.md`,
@@ -62,7 +66,7 @@ Concretely, for the author to tag `v1.0.0`, GeoBase must:
    met with the IRB review track documented (DG-6), and all status docs
    congruent with the code.
 
-**Non-gating 1.x backlog (default, pending DG-1):** public-data acquisition
+**Non-gating 1.x backlog (ratified at DG-1, 2026-07-16):** public-data acquisition
 (F4, `tools/acquire/`), the simulation engine (F1, `geobase-sim`), federation
 (roadmap 2.0, FIDP), and the secure LiDAR twin (F2+F3, roadmap 2.1). These are
 real committed direction — their grounded work breakdowns are preserved in the
@@ -224,7 +228,7 @@ also involves an external authority that is called out.
 
 | Gate | Owner | Question | Default | Evidence the owner needs | Blocks |
 |---|---|---|---|---|---|
-| **DG-1** | Author | Where is the 1.0 line? | **Sovereignty-core 1.0**: Phases 1.2+1.3 as one combined gate + release hardening; F1–F4/federation/LiDAR are serial 1.x backlog | Tracked `ARCHITECTURE.md` ("not a v1 requirement", rendering section) and `ROADMAP.md` vs the untracked build directive; digital-twin scope roughly doubles remaining work; solo maintainer gets no parallelism benefit | Everything after Phase 0; resolved **only when the owner records RATIFIED** in `docs/RELEASE-DEFINITION.md` (file existence/commit is not resolution — the file is committed in DRAFT status) |
+| **DG-1** | Author | Where is the 1.0 line? | **Sovereignty-core 1.0**: Phases 1.2+1.3 as one combined gate + release hardening; F1–F4/federation/LiDAR are serial 1.x backlog | Tracked `ARCHITECTURE.md` ("not a v1 requirement", rendering section) and `ROADMAP.md` vs the untracked build directive; digital-twin scope roughly doubles remaining work; solo maintainer gets no parallelism benefit | **RESOLVED — RATIFIED 2026-07-16** in `docs/RELEASE-DEFINITION.md` (owner act; see status below). Formerly blocked everything after Phase 0 |
 | **DG-2** | Author | Which at-rest cipher? | **Pure-Rust** candidate; SQLCipher's C dependency contradicts the tracked pure-Rust product decision (`docs/DECISIONS.md` 2026-07-06; `PROCESS-MAP.md` standing decisions) | Spike matrix: dependency posture, key management, migration, backup, failure semantics, lost-key (deliberately unrecoverable) policy fit | Phase B cipher implementation (B3–B4); ceremony *design* may proceed |
 | **DG-3** | Author | S1 — Whitebox Next Gen licensing (F1) | If the ten F1 tools are in the open split with in-memory signatures → adopt Next Gen; else the **pre-approved legacy-MIT vendor fallback**, no new vetting round | License inventory of the vendored `wbtools_oss` tree; per the directive this is a "stop-and-choose point" | `geobase-sim` scaffolding only (Backlog B-2) — nothing on the 1.0 critical path |
 | **DG-4** | Author | S2 — COPC vault storage (F2) | Lean container-is-artifact (file-backed) per the directive; decide on **measured** blob-vs-file numbers under a real client read pattern | Spike measurements into `DECISIONS.md` | The durable vault-storage decision in Backlog B-4 only — **not** the option-neutral endpoint work in the same item |
@@ -398,8 +402,8 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
     completed phase inline.
   - *Deps:* P0.1.
   - **Executed 2026-07-11:** README § Status now defers to `docs/ROADMAP.md`
-    and links the DRAFT `docs/RELEASE-DEFINITION.md` (labeled as pending
-    ratification).
+    and links `docs/RELEASE-DEFINITION.md` (DRAFT and labeled pending at the
+    time; the README label updated to RATIFIED on 2026-07-16).
 - [x] **P0.4 — Repair the dangling RStep script.** `verify:rstep` in
   `solo/rstep/package.json` points at nonexistent `scripts/verify-rstep.mjs`;
   either remove the script entry until Phase A builds the harness or stub it to
@@ -420,7 +424,8 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
   - *Verify:* tracked; `RELEASE-DEFINITION.md` links it.
   - *Deps:* P0.1.
   - **Executed 2026-07-11:** `CONTRIBUTING.md` § "Branch & congruence
-    discipline" added; `RELEASE-DEFINITION.md` (DRAFT) cross-references it.
+    discipline" added; `RELEASE-DEFINITION.md` (DRAFT at the time; RATIFIED
+    2026-07-16) cross-references it.
 - [x] **P0.6 — Apply DG-1-consistent wording.** Under the default, tracked
   `ROADMAP.md` 2.1 keeps its "optional" heavy-render wording and gains a note
   that the deck.gl direction is recorded backlog authority; if the owner
@@ -640,14 +645,25 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     leakage reviewed; the "no plaintext T3 at rest" claim is true across
     every path before B6/B8 run.
   - *Deps:* B4 (and its backend decision).
-- [ ] **B5 — Requester authentication.** Per-app tokens (already flagged in the
-  1.0 loopback decision — `docs/DECISIONS.md` 2026-07-06 "per-app tokens arrive
-  with the Phase 1.2 ceremony work"); extend `ExportAuthorization` with identity
-  evidence; retire the A1 interim guard in the same commit.
-  - *Touches:* `crates/geobase-gpkg/src/ceremony.rs` (`ExportAuthorization`);
-    `crates/geobase-engine-desktop/src/server.rs`; `solo/sdk/src/index.ts`.
-  - *Verify:* unauthenticated export refused with audit row; SDK integration
-    test green; the A1 token path is gone.
+- [ ] **B5 — Requester authentication (task rewritten 2026-07-16 per the
+  owner's ratified decision — the earlier per-app-token direction is
+  REJECTED; `docs/CEREMONY-DESIGN.md` §7).** One enrolled **LocalOperator**
+  credential: an OS-keychain-protected signing credential (DPAPI/Credential
+  Manager on Windows; Secret Service on Linux) bound to the OS account at
+  enrollment, fail-closed without a secure keyring; export authorization
+  moves behind an **OS-peer-identity boundary** (Tauri IPC / named pipe /
+  UDS — plain loopback HTTP alone can no longer authorize an export;
+  short-lived IPC-minted credential if HTTP stays as transport).
+  `TribalDelegate` stays schema-present but **unissuable**. The free-text
+  identity fields are REPLACED (B3's breaking seam change), not extended.
+  Retire the A1 interim guard in the same commit.
+  - *Touches:* `crates/geobase-gpkg/src/ceremony.rs` (typed identity);
+    `crates/geobase-engine-desktop/src/server.rs` + the Tauri shell (IPC
+    boundary); `solo/sdk/src/index.ts`.
+  - *Verify:* unauthenticated export refused with audit row; no export
+    authorized over plain loopback HTTP alone; keyring-absent → fail
+    closed; SDK integration test green; the A1 token path is gone;
+    delegate issuance impossible in a release build.
   - *Deps:* A1 (retires it), B3.
 - [ ] **B6 — Adversarial-egress suite.** Author the suite proving the
   architectural T3 guarantee: no export path, no network path, no plaintext at
@@ -1035,13 +1051,12 @@ single-maintainer-throughput risks are all represented.
    code-signing certificate (and Apple Developer ID, if macOS is in) is not
    procured by C1, or macOS runner cost/identity is unresolved when C1 closes.
 
-7. **The sovereign ceremony process is owner-only and undesigned.** *(calendar,
-   dependency)* B3 cannot proceed until B2 designs the FPIC mechanism, which
-   `docs/CEREMONY-GATE.md` deliberately reserves to the author. *Mitigation:* the
-   design sitting (B2) is scheduled and constrained by the seven CEREMONY-GATE
-   contract clauses, so it is bounded work, not open-ended research. *Early
-   warning:* the B2 sitting slips repeatedly, or B3 implementation starts against
-   an un-updated `CEREMONY-GATE.md`.
+7. **~~The sovereign ceremony process is owner-only and undesigned.~~
+   RETIRED 2026-07-16:** the B2 design sitting happened and the mechanism is
+   ratified (`docs/CEREMONY-DESIGN.md`; `docs/DECISIONS.md` 2026-07-16). The
+   residual risk is now ordinary implementation fidelity — B3 building
+   something other than the ratified design — mitigated by the design's own
+   §11 contract-test bar and the per-phase adversarial review discipline.
 
 8. **Informational-gate promotion depends on CI history, not repo state.**
    *(process)* Whether `render-gate`/`node-render-gate`/`layer-gate`/`rstep-gate`
@@ -1059,10 +1074,13 @@ Only questions still genuinely open after the decision gates above:
    (OV/EV cert, sigstore-style, or store-based), who holds the secret, and is
    macOS a 1.0 platform at all? Owner decision inside C1/C2; no default asserted
    because it has cost and identity implications outside the repo.
-2. **The sovereign ceremony process design itself (B2).** Deliberately not
-   designed in advance — `docs/CEREMONY-GATE.md` reserves the mechanism as the
-   author's authority. The plan schedules the design sitting but cannot
-   pre-decide its content.
+2. **~~The sovereign ceremony process design itself (B2).~~ CLOSED
+   2026-07-16:** designed and ratified at the owner sitting —
+   `docs/CEREMONY-DESIGN.md` is the design of record. The one deliberately
+   open sovereign sub-question inside it: who may issue a `TribalDelegate`
+   credential (unissuable in 1.0 until the owner ratifies an issuer
+   ceremony); multi-operator key wrapping likewise stays open under DG-2's
+   ratified constraints.
 3. **Render-gate promotion status.** Whether `render-gate`/`node-render-gate`/
    `layer-gate` have accumulated their five consecutive green runs on `main` is
    CI history, not repo state — check before assuming C6 is a one-line change.
