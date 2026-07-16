@@ -137,6 +137,16 @@ class UrllibTransport:
                         out.write(chunk)
                     out.flush()
                     os.fsync(out.fileno())
+            # Reject a SHORT read before promotion: a connection that ended
+            # early must not become a staged "success" (review advisory). The
+            # advertised size is the source's own exact byte count, so a
+            # truncated download is a failure, not a smaller success.
+            if written < expected_bytes:
+                _remove_quietly(part_path)
+                raise TransportError(
+                    f"{url} downloaded {written} of {expected_bytes} advertised "
+                    f"bytes — truncated, refusing to promote a short file"
+                )
             os.replace(part_path, dest_path)  # atomic promotion on success only
             return written
         except (urllib.error.HTTPError, urllib.error.URLError, TransportError, OSError) as err:

@@ -276,22 +276,34 @@ owner review in the morning.
    labeled as such); no ceremony-mechanism decision (B2 is prepared as a DRAFT
    proposal only); no classification acts; no pushes to the public remote —
    all commits stay local for morning review.
-3. **Scope executed tonight, in order:** Phase A (A1–A7); Phase B engineering
-   that is not owner-reserved (B1 spike evidence, B4 per the DG-2 default
-   behind the fail-closed seam, B5 requester-auth machinery, B6/B7 proof
-   suites); release-hardening engineering (C3 notices/license audit, C4, C5);
-   and owner-directed early entry into Backlog B-1 (`tools/acquire`) plus the
-   DG-3 S1 spike.
+3. **Scope.** *(Drafted at session start as planned scope; it originally
+   over-listed B4/B5/B6/B7 as executed. Corrected here to what ACTUALLY landed,
+   per the overnight final review
+   `_reviews/geobase/2026-07-16_overnight-final-review.md`.)*
+   - **Landed + merged:** Phase A (A1–A7); the **B1 DG-2 cipher spike only**
+     (recommendation recorded below — no cipher code); the **DG-3 S1 Whitebox
+     spike only** (recorded below — nothing vendored, `geobase-sim` not
+     scaffolded); release hardening **C3 partial** (cargo license gate live;
+     pnpm informational), **C4 = a trait/seam test only** (not a node-config
+     path — `SourceKind` has no local-file variant), **C5 = a procedure doc
+     only** (no fetch/diff, no before/after stamp artifact); owner-directed
+     **Backlog B-1 partial** (`tools/acquire` staging lane, not the full
+     acquire→GeoPack round-trip); and the **B2 ceremony DRAFT proposal**.
+   - **NOT done — unimplemented, owner-open:** B3 (sovereign `CeremonyGate`),
+     B4 (real at-rest cipher / DG-2 impl), B5 (requester authentication), B6
+     (adversarial-egress suite), B7 (runtime network-denial harness).
+     `ProvisionalDevGate` remains the only composed gate; no sovereign
+     cryptography, authentication, or egress proof exists yet.
 4. **Codex data-gate change:** see `AGENTS.md` § Data gate (dated grant).
    Basis: the owner's declaration that all material in use for this build is
    Tier 0. The adversary-profile deny-by-default review rules are unchanged.
 
 **Strongest surviving objection:** executing Phase A before DG-1 ratification
 risks wasted work if Patrick overrides DG-1 toward a different 1.0 line;
-accepted because the owner directed the build explicitly, everything executed
-is on every candidate 1.0 line's critical path (the RStep gate harness, the
-egress proofs, the cipher), and no acceptance or ratification act is
-simulated.
+accepted because the owner directed the build explicitly, everything that
+landed (the RStep gate harness, the interim guard, the spikes, the
+out-of-product tooling) is on every candidate 1.0 line's critical path, and no
+acceptance or ratification act is simulated.
 
 ## 2026-07-16 — Phase A A6: RStep is pack-driven (F7.4 honesty check, recorded)
 

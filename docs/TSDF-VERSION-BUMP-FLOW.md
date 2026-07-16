@@ -50,15 +50,19 @@ deliberate sovereign decision, never automatic" (`crates/geobase-tsdf/src/lib.rs
 
 ## What is demonstrated today vs. deferred
 
-- **Demonstrated (C4, in `geobase-tsdf` tests):** the resolver source is
-  swappable **by config alone** — a node moves from the vendored model to an
-  operator-held tier model (`VendoredSource::from_str`, origin
-  `local-file:governance/tiers.toml`) through the same `TsdfSource` trait, with
-  the swap-invariant (T3 never egresses; four tiers present) preserved. This is
-  the "governance moves by config" half of portability, offline.
-- **Deferred to Phase 2.2:** the networked `GitHubSource` fetch + diff and the
-  `LocalServerSource` private-server fetch. Both remain honest stubs that defer
-  rather than self-update — the sovereignty-preserving default.
+- **C4 — a trait/seam test (not yet a node-config path):** the `geobase-tsdf`
+  test constructs `VendoredSource::from_str(...)` directly and proves the
+  `TsdfSource` trait loads an operator-held tier model through the same seam,
+  origin distinct, with the swap-invariant preserved (T3 never egresses; four
+  tiers). This is genuine **seam** evidence that no code hardcodes tier
+  semantics. It is **not** the full "a node moves by config alone" path:
+  `SourceKind`/`source_from_config` has no local-file variant yet, so wiring a
+  node to boot from an operator file is the remaining C4 step.
+- **C5 — a documented future flow (not an end-to-end demonstration):** the flow
+  below is procedure. There is **no** before/after artifact proving "existing
+  data keeps its stamp" yet, and the networked `GitHubSource` fetch + diff and
+  `LocalServerSource` private-server fetch are Phase 2.2 stubs that defer
+  rather than self-update. A test pins that they defer.
 
 ## Owner note
 

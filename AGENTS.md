@@ -74,7 +74,8 @@ Claude (the director) is the final decider; review is input, not veto.
   instruction quietly narrows it.
 - **Red — still never read, pipe, or summarize**: any real-world dataset
   outside this repository, credentials or secrets anywhere, anything outside
-  `C:\dev`. Never push to remotes. When in doubt, treat as red — the TSDF
-  default posture applies to context, too. The adversary-profile
-  deny-by-default review rules (`C:\dev\AGENTS.md`) continue to bind review
-  jobs regardless of this grant.
+  the multi-project workspace this repo lives in. Never push to remotes. When
+  in doubt, treat as red — the TSDF default posture applies to context, too.
+  The adversary-profile deny-by-default review rules (the workspace-root
+  `AGENTS.md`, one level above this repo) continue to bind review jobs
+  regardless of this grant.

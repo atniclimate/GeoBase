@@ -77,6 +77,32 @@ oracle), and a CesiumJS heavy-3D path (Option A — documented escalation only).
 
 ## Current Position
 
+> **Reconciliation note (2026-07-16 overnight build).** An owner-directed
+> overnight build landed several items this section and the Phase A/C task
+> lists below were written *before*. Reconciled here per this plan's own update
+> rule (§ "When to update this plan"), **without** changing acceptance status:
+> DG-1 stays open, `docs/RELEASE-DEFINITION.md` stays DRAFT, and Phases 1.2/1.3
+> stay **not** accepted-complete. What changed:
+> - **Phase A (A1–A7) is BUILT and merged to local `main`** (not pushed) — the
+>   interim export-token guard *and* the real RStep 1.3d harness
+>   (`solo/rstep/scripts/verify-rstep.mjs` + `verify_rstep_oracle.py` +
+>   `examples/verify-export-audit.rs`), with the `rstep-gate` CI job
+>   (informational, provisional-labeled). This runs against `ProvisionalDevGate`
+>   and is **explicitly not** Phase 1.3 acceptance (that is B8/M5). So the
+>   "Missing entirely: the RStep 1.3d gate" and "No RStep job exists" statements
+>   below, and the unchecked A1–A7 boxes in Phase A, are **superseded** —
+>   corrected inline where they appear.
+> - **B1 (DG-2 cipher) and DG-3 (S1 Whitebox) spikes recorded** in
+>   `docs/DECISIONS.md`; **B2 ceremony DRAFT proposal** at
+>   `docs/CEREMONY-DESIGN-PROPOSAL.md`. B3–B7 remain unimplemented/owner-open.
+> - **Release hardening partial:** `THIRD_PARTY_NOTICES.md` exists (so "absent
+>   today" below is superseded); C3 cargo license gate live (pnpm informational
+>   — C3 partial); C4 is a trait/seam test only; C5 a procedure doc only.
+> - **Backlog B-1 partial:** the `tools/acquire` staging lane exists (not the
+>   full acquire→GeoPack round-trip; MB1 not complete).
+> The milestone table (M1–M8) is unchanged in intent; no milestone is marked
+> reached, because acceptance is reserved and DG-1 is open.
+
 Per tracked `docs/ROADMAP.md`, five phases are accepted-complete with observed
 gates and committed evidence: scaffold/spine (0.1), local-source 3D terrain
 proof (0.2), the GeoPack ingestor MVP (0.3), the grounded Rust/Tauri desktop
@@ -105,16 +131,17 @@ overstated it):
   harness run plus the human-endorsed captures in `docs/verification/`. v0.1's
   claim that these "enforce continuously" was overstated; they *run*
   continuously.
-- **Missing entirely:** the RStep 1.3d gate — `docs/PROCESS-MAP.md` §8 marks it
-  "QUEUED — not yet built". *(Updated 2026-07-11, Phase 0 P0.4: the previously
-  dangling `verify:rstep` reference — `solo/rstep/package.json` pointed at a
-  `scripts/verify-rstep.mjs` that did not exist — is repaired with a committed
-  honest stub at `solo/rstep/scripts/verify-rstep.mjs` that exits non-zero with
-  a "NOT YET BUILT (Phase A)" message. The stub is not the harness.)* No RStep
-  job exists in any tracked workflow (`grep -rni rstep .github/workflows/`
-  returns nothing). Building the real harness is real engineering (fixtures,
-  browser automation, ledger inspection, pyogrio verification, CI wiring), not
-  "wiring."
+- **~~Missing entirely: the RStep 1.3d gate~~ — SUPERSEDED 2026-07-16 (see the
+  reconciliation note above): the real harness is now built and merged
+  (`solo/rstep/scripts/verify-rstep.mjs`), the `rstep-gate` job exists in
+  `.github/workflows/render-gate.yml` (informational, provisional-labeled), and
+  `docs/PROCESS-MAP.md` §8 reflects "harness built — acceptance deferred to
+  M5/B8". Green there is engineering evidence, NOT Phase 1.3 acceptance.** The
+  pre-overnight text is preserved for history: *the previously dangling
+  `verify:rstep` reference was a committed honest stub (Phase 0 P0.4); building
+  the real harness was real engineering (fixtures, browser automation, ledger
+  inspection, pyogrio verification, CI wiring), not "wiring" — which is exactly
+  what the overnight Phase A did.*
 - **Also missing:** pre-commit hooks, Windows/macOS CI of any kind,
   installer/signing/packaging jobs, release automation, SBOM/license gating,
   and any runtime network-denial harness. All CI runs on `ubuntu-latest`.
