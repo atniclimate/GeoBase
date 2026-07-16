@@ -174,7 +174,7 @@ jobs:
           cargo build --locked -p geobase-ingestor --bin geopack
           cargo build --locked -p geobase-engine-desktop --example node
           cargo build --locked -p geobase-engine-desktop --example verify-export-audit
-      - name: Run the RStep gate (self-contained: packages, boots, drives, re-proves)
+      - name: "Run the RStep gate (self-contained: packages, boots, drives, re-proves)"
         env:
           RSTEP_ORACLE_PYTHON: python
         run: pnpm --filter @geobase/rstep run verify:rstep
