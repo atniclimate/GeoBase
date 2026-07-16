@@ -82,12 +82,19 @@ impl RecordedConsentGate {
     }
 
     /// Steps 2–5 shared by authorize and revalidate. Returns the matched
-    /// record's ceremony answer.
+    /// record's ceremony answer. Opens the store itself (floor first).
     fn check(&self, auth: &ExportAuthorization<'_>) -> Result<CeremonyRecord, CeremonyError> {
         // §5.1 step 2 — T3 floor, BEFORE any consent-store access. The
         // effective source tier is node-derived by construction (the
         // witness type has no requester-supplied producer), and an empty
         // witnessed set resolves to T3.
+        Self::floor(auth)?;
+        let store = self.open_store()?;
+        self.check_with_store(&store, auth)
+    }
+
+    /// §5.1 step 2 — the T3 floor, total and store-free.
+    fn floor(auth: &ExportAuthorization<'_>) -> Result<(), CeremonyError> {
         let source_tier = auth.effective_source_tier();
         if source_tier == Tier::T3 || auth.product_tier == Tier::T3 {
             let tier = if source_tier == Tier::T3 {
@@ -97,6 +104,18 @@ impl RecordedConsentGate {
             };
             return Err(ExportRefused::TierNeverExports { tier }.into());
         }
+        Ok(())
+    }
+
+    /// Steps 2–5 against an ALREADY-OPEN store — used by the publication-
+    /// point revalidation so the check runs under a held publication lock
+    /// (design §10, review B3 F3).
+    fn check_with_store(
+        &self,
+        store: &ConsentStore,
+        auth: &ExportAuthorization<'_>,
+    ) -> Result<CeremonyRecord, CeremonyError> {
+        Self::floor(auth)?;
 
         // §5.1 step 4 preamble — capture the node-clock instant ONCE,
         // immediately before matching begins, so the same instant exists
@@ -107,7 +126,6 @@ impl RecordedConsentGate {
             reason: e.to_string(),
         })?;
 
-        let store = self.open_store()?;
         let source_set: Vec<String> = auth.source_packs.iter().map(|p| p.id.clone()).collect();
         let matched = store
             .match_agreement(&source_set, auth.requester, auth.product_class, observed_at)
@@ -152,6 +170,35 @@ impl RecordedConsentGate {
             }),
         })
     }
+
+    /// §10: the fresh publication-point check must resolve to the SAME
+    /// lineage head the authorization matched — a different head (or any
+    /// refusal upstream) aborts this publication. Returns the sequence
+    /// observed at the publication point.
+    fn confirm_same_head(
+        record: &CeremonyRecord,
+        fresh: &CeremonyRecord,
+    ) -> Result<Option<i64>, CeremonyError> {
+        let (Some(original), Some(current)) = (&record.consent, &fresh.consent) else {
+            return Err(CeremonyError::Infrastructure {
+                reason: "revalidation of a record without consent provenance".into(),
+            });
+        };
+        if current.agreement_id != original.agreement_id {
+            return Err(CeremonyError::Refused(ExportRefused::Declined {
+                reason: format!(
+                    "consent changed between authorization and publication: agreement \
+                     '{}' no longer governs this export (now '{}') — the export is \
+                     aborted; the current consent state governs the next attempt",
+                    original.agreement_id, current.agreement_id
+                ),
+                observed_at: Some(fresh.observed_at),
+            }));
+        }
+        // The revalidated sequence (design §10): a revocation committing
+        // AFTER this snapshot governs the next export, not this one.
+        Ok(Some(current.consent_store_sequence))
+    }
 }
 
 impl CeremonyGate for RecordedConsentGate {
@@ -172,25 +219,31 @@ impl CeremonyGate for RecordedConsentGate {
         record: &CeremonyRecord,
     ) -> Result<Option<i64>, CeremonyError> {
         let fresh = self.check(auth)?;
-        let (Some(original), Some(current)) = (&record.consent, &fresh.consent) else {
-            return Err(CeremonyError::Infrastructure {
-                reason: "revalidation of a record without consent provenance".into(),
-            });
-        };
-        if current.agreement_id != original.agreement_id {
-            return Err(CeremonyError::Refused(ExportRefused::Declined {
-                reason: format!(
-                    "consent changed between authorization and publication: agreement \
-                     '{}' no longer governs this export (now '{}') — the export is \
-                     aborted; the current consent state governs the next attempt",
-                    original.agreement_id, current.agreement_id
-                ),
-                observed_at: Some(fresh.observed_at),
-            }));
-        }
-        // The revalidated sequence (design §10): a revocation committing
-        // AFTER this snapshot governs the next export, not this one.
-        Ok(Some(current.consent_store_sequence))
+        Self::confirm_same_head(record, &fresh)
+    }
+
+    /// §10 + review B3 F3: acquire the consent store's publication lock
+    /// FIRST, revalidate UNDER it, and hand the held lock to the export
+    /// pipeline. No consent write — this process or another (the
+    /// `record-consent` CLI included) — can commit between the snapshot
+    /// this returns and the ledger seal the pipeline performs while the
+    /// guard lives.
+    fn revalidate_for_publication(
+        &self,
+        auth: &ExportAuthorization<'_>,
+        record: &CeremonyRecord,
+    ) -> Result<crate::ceremony::PublicationGuard, CeremonyError> {
+        // Floor first: a floor refusal must never open the store.
+        Self::floor(auth)?;
+        let store = self.open_store()?;
+        let lock = store
+            .lock_for_publication()
+            .map_err(|e| CeremonyError::Infrastructure {
+                reason: e.to_string(),
+            })?;
+        let fresh = self.check_with_store(&store, auth)?;
+        let sequence = Self::confirm_same_head(record, &fresh)?;
+        Ok(crate::ceremony::PublicationGuard::locked(sequence, lock))
     }
 }
 
@@ -534,6 +587,45 @@ mod tests {
             }
             other => panic!("expected Declined on head change, got: {other}"),
         }
+    }
+
+    /// Design §10 / review B3 F3: `revalidate_for_publication` returns a
+    /// guard that HOLDS the consent store's publication lock — a
+    /// revocation attempted while the guard lives cannot commit (the §6
+    /// step-3 seal happens inside that window); after the guard drops,
+    /// the revocation commits and governs the next export.
+    #[test]
+    fn publication_guard_blocks_revocation_until_dropped() {
+        let dir = temp_dir("pubguard");
+        record_agreement(&dir, "a1", &["dem"]);
+        let requester = operator();
+        let packs = witnessed(&[("dem", Tier::T1)]);
+        let g = gate(&dir);
+        let authorization = auth(&packs, &requester, Tier::T2);
+        let record = g.authorize_export(&authorization).unwrap();
+        // Writer handle opened BEFORE the lock (a separate connection,
+        // standing in for the record-consent CLI process).
+        let writer = store(&dir);
+        let guard = g
+            .revalidate_for_publication(&authorization, &record)
+            .unwrap();
+        assert!(
+            guard.sequence.is_some(),
+            "sovereign guard carries the sequence"
+        );
+        assert!(
+            writer.revoke("a1", &operator()).is_err(),
+            "a revocation must not commit inside the revalidation→seal window"
+        );
+        drop(guard);
+        writer.revoke("a1", &operator()).unwrap();
+        // The revocation that committed AFTER the window governs the next
+        // export: a fresh revalidation refuses.
+        let err = g.revalidate(&authorization, &record).unwrap_err();
+        assert!(matches!(
+            err,
+            CeremonyError::Refused(ExportRefused::Declined { .. })
+        ));
     }
 
     #[test]

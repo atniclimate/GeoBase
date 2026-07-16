@@ -339,6 +339,27 @@ impl ConsentStore {
         head_sequence_of(self.gpkg.conn())
     }
 
+    /// Acquire the store's **publication lock** (design §10, review B3
+    /// F3): a held `BEGIN IMMEDIATE` transaction on a dedicated
+    /// connection. While the returned guard lives, NO consent write — in
+    /// this process or any other (the `record-consent` CLI included) —
+    /// can commit, so the state revalidation observed cannot change
+    /// between the publication-point check and the ledger seal. The guard
+    /// never writes; dropping it rolls the empty transaction back and
+    /// releases the lock. Cross-resource ACID with the export ledger is
+    /// impossible by design — this serializes through SQLite file locking
+    /// instead.
+    pub fn lock_for_publication(&self) -> Result<ConsentStoreLock, ConsentStoreError> {
+        let conn = rusqlite::Connection::open(self.gpkg.path()).map_err(GpkgError::from)?;
+        // A bounded wait lets an in-flight consent write finish; after it
+        // commits, the revalidation under this lock observes it.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(GpkgError::from)?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(GpkgError::from)?;
+        Ok(ConsentStoreLock { _conn: conn })
+    }
+
     /// Record one agreement (§3.3): a LocalOperator act; active the moment
     /// it is recorded evidence-complete. `supersedes` names the explicit
     /// predecessors this record supersedes (a new head may resolve several
@@ -928,6 +949,20 @@ fn rebuild_conditions(row: &StoredAgreement) -> Result<Conditions, ConsentStoreE
         purpose_limit: row.purpose_limit.clone(),
         geography_limit: row.geography_limit.clone(),
     })
+}
+
+/// A held publication lock on the consent store — see
+/// [`ConsentStore::lock_for_publication`]. Holds an open `BEGIN
+/// IMMEDIATE` transaction; dropping the connection rolls it back
+/// (releasing the lock) — the guard performs no writes, ever.
+pub struct ConsentStoreLock {
+    _conn: rusqlite::Connection,
+}
+
+impl std::fmt::Debug for ConsentStoreLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConsentStoreLock").finish_non_exhaustive()
+    }
 }
 
 /// The §9 witnessed-verbal proof-core commitment: a domain-separated hash
@@ -1629,6 +1664,32 @@ mod tests {
         assert_eq!(kind, "corrected_by");
         let statuses = s.statuses().unwrap();
         assert_eq!(statuses["v1"], AgreementStatus::Superseded);
+    }
+
+    /// Design §10 / review B3 F3: while the publication lock is held, a
+    /// concurrent consent write (here: a revocation through a second
+    /// store handle, standing in for the `record-consent` CLI process)
+    /// CANNOT commit; after the guard drops it can.
+    #[test]
+    fn publication_lock_blocks_concurrent_writes_until_dropped() {
+        let dir = temp_dir("publock");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
+            .unwrap();
+        // A second, independent handle (its own connection) — opened
+        // BEFORE the lock so its writes contend on the lock, not on open.
+        let other = store(&dir);
+        let lock = s.lock_for_publication().unwrap();
+        let blocked = other.revoke("a1", &operator());
+        assert!(
+            blocked.is_err(),
+            "a revocation must not commit while the publication lock is held"
+        );
+        // The subject is still Active — nothing committed.
+        assert_eq!(s.statuses().unwrap()["a1"], AgreementStatus::Active);
+        drop(lock);
+        other.revoke("a1", &operator()).unwrap();
+        assert_eq!(s.statuses().unwrap()["a1"], AgreementStatus::Revoked);
     }
 
     #[test]

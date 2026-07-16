@@ -166,9 +166,21 @@ fn read_tables(gpkg: &GeoPackage, path: &str) -> Result<Vec<TableInfo>, VaultErr
 /// doubt, T3"): a node that cannot currently prove a low tier must treat
 /// the pack as sovereign.
 pub fn current_effective_tier(path: &Path) -> Tier {
-    match GeoPackage::open(path).and_then(|gpkg| gpkg.geopackage_tier()) {
+    match GeoPackage::open(path) {
+        Ok(gpkg) => effective_tier_of(&gpkg),
+        // Missing/unreadable artifact — sovereign by default.
+        Err(_) => Tier::T3,
+    }
+}
+
+/// The effective tier of an ALREADY-OPEN artifact handle (review B3 F1b):
+/// the serving routes read tier and data from the SAME open `GeoPackage`
+/// so a file swapped between a tier check and a data read can never be
+/// served at the stale tier — one open, one artifact, check and use
+/// coherent by construction. Untagged or unreadable tags → T3.
+pub fn effective_tier_of(gpkg: &GeoPackage) -> Tier {
+    match gpkg.geopackage_tier() {
         Ok(Some(tier)) => tier,
-        // Untagged artifact or read failure — sovereign by default.
         Ok(None) | Err(_) => Tier::T3,
     }
 }

@@ -55,11 +55,31 @@ struct SessionRecord {
     packs: BTreeSet<String>,
 }
 
+/// The registry's interior: sessions by id plus the per-owner index that
+/// makes issuance idempotent (review B3 F2). Both maps live under ONE
+/// mutex so issue/witness/consume are atomic against each other.
+#[derive(Debug, Default)]
+struct Registry {
+    sessions: HashMap<String, SessionRecord>,
+    /// owner → the id of their single live session.
+    by_owner: HashMap<String, String>,
+}
+
 /// The per-boot session registry. Interior mutability so the axum state
 /// can share one registry across handlers.
+///
+/// **One live session per operator** (review B3 F2): issuance is
+/// idempotent — an operator who already holds an open session gets the
+/// SAME id back, so there is no way to hold two simultaneously valid
+/// sessions, serve a higher-governance pack under one and export under
+/// the other. Every serve for an operator accumulates into their one open
+/// session; consuming it (at export) closes it, and only then does a new
+/// issuance mint a fresh id. Full session↔work-unit binding with
+/// authenticated serves is B5 territory (operator identity); this closure
+/// is the proportionate B3 boundary.
 #[derive(Debug, Default)]
 pub struct SessionRegistry {
-    sessions: Mutex<HashMap<String, SessionRecord>>,
+    inner: Mutex<Registry>,
 }
 
 /// Errors surfaced to serving/export handlers.
@@ -74,24 +94,35 @@ pub enum SessionError {
 }
 
 impl SessionRegistry {
-    /// Issue a new, unforgeable session id (OS CSPRNG, 32 hex chars) bound
-    /// to `owner` (the authenticated operator identity). Issuance is only
-    /// reached after the operator token is verified, so a session cannot
-    /// be minted anonymously.
+    /// Issue the operator's session id — **idempotent per owner** (review
+    /// B3 F2): if `owner` already holds an open session its id is returned
+    /// unchanged, so two simultaneously valid sessions for one operator
+    /// cannot exist and a serve can never be split away from the session
+    /// an export names. A fresh id (OS CSPRNG, 32 hex chars) is minted
+    /// only when the owner has no open session. Issuance is only reached
+    /// after the operator token is verified, so a session cannot be
+    /// minted anonymously.
     pub fn issue(&self, owner: &str) -> Result<String, getrandom::Error> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| getrandom::Error::UNSUPPORTED)?;
+        if let Some(existing) = inner.by_owner.get(owner) {
+            if inner.sessions.contains_key(existing) {
+                return Ok(existing.clone());
+            }
+        }
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes)?;
         let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        self.sessions
-            .lock()
-            .map_err(|_| getrandom::Error::UNSUPPORTED)?
-            .insert(
-                id.clone(),
-                SessionRecord {
-                    owner: owner.to_string(),
-                    packs: BTreeSet::new(),
-                },
-            );
+        inner.sessions.insert(
+            id.clone(),
+            SessionRecord {
+                owner: owner.to_string(),
+                packs: BTreeSet::new(),
+            },
+        );
+        inner.by_owner.insert(owner.to_string(), id.clone());
         Ok(id)
     }
 
@@ -100,8 +131,8 @@ impl SessionRegistry {
     /// A closed/unknown session is refused loudly (an app that believes it
     /// is accumulating provenance must not silently accumulate nothing).
     pub fn witness(&self, session_id: &str, pack_id: &str) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.lock().map_err(|_| SessionError::Poisoned)?;
-        match sessions.get_mut(session_id) {
+        let mut inner = self.inner.lock().map_err(|_| SessionError::Poisoned)?;
+        match inner.sessions.get_mut(session_id) {
             Some(record) => {
                 record.packs.insert(pack_id.to_string());
                 Ok(())
@@ -116,13 +147,20 @@ impl SessionRegistry {
     /// for a session this boot never issued or already consumed;
     /// `Err(WrongOwner)` if it was issued to a different operator.
     pub fn consume(&self, session_id: &str, owner: &str) -> Result<Vec<String>, SessionError> {
-        let mut sessions = self.sessions.lock().map_err(|_| SessionError::Poisoned)?;
-        match sessions.get(session_id) {
+        let mut inner = self.inner.lock().map_err(|_| SessionError::Poisoned)?;
+        match inner.sessions.get(session_id) {
             Some(record) if record.owner != owner => Err(SessionError::WrongOwner),
             // Total match on the request path (review B3 F10): removal is
             // re-checked, never assumed — no panic can reach a handler.
-            Some(_) => match sessions.remove(session_id) {
-                Some(record) => Ok(record.packs.into_iter().collect()),
+            Some(_) => match inner.sessions.remove(session_id) {
+                Some(record) => {
+                    // Clear the per-owner index so the NEXT issuance mints
+                    // a fresh session (review B3 F2).
+                    if inner.by_owner.get(&record.owner).map(String::as_str) == Some(session_id) {
+                        inner.by_owner.remove(&record.owner);
+                    }
+                    Ok(record.packs.into_iter().collect())
+                }
                 None => Err(SessionError::Unknown),
             },
             None => Err(SessionError::Unknown),
@@ -132,8 +170,8 @@ impl SessionRegistry {
     /// Whether a session id is currently known and open (for serve-time
     /// gating on export-enabled nodes).
     pub fn is_open(&self, session_id: &str) -> Result<bool, SessionError> {
-        let sessions = self.sessions.lock().map_err(|_| SessionError::Poisoned)?;
-        Ok(sessions.contains_key(session_id))
+        let inner = self.inner.lock().map_err(|_| SessionError::Poisoned)?;
+        Ok(inner.sessions.contains_key(session_id))
     }
 }
 
@@ -191,17 +229,40 @@ mod tests {
         );
     }
 
+    /// Review B3 F2: issuance is idempotent per owner — the session-
+    /// substitution split (serve under A, export under a fresh B) is
+    /// structurally impossible because A and B are the same session.
     #[test]
-    fn sessions_are_independent_and_ids_unique() {
+    fn issue_is_idempotent_per_owner_until_consumed() {
         let registry = SessionRegistry::default();
         let a = registry.issue("local-operator:op").unwrap();
         let b = registry.issue("local-operator:op").unwrap();
-        assert_ne!(a, b);
+        assert_eq!(a, b, "an open session is returned unchanged");
+        // Serves before and after the second issuance accumulate into the
+        // SAME record — nothing can be split away.
         registry.witness(&a, "dem").unwrap();
+        registry.witness(&b, "landcover").unwrap();
+        assert_eq!(
+            registry.consume(&b, "local-operator:op").unwrap(),
+            vec!["dem", "landcover"]
+        );
+        // Only after consumption does issuance mint a fresh id.
+        let c = registry.issue("local-operator:op").unwrap();
+        assert_ne!(a, c);
         assert!(registry
-            .consume(&b, "local-operator:op")
+            .consume(&c, "local-operator:op")
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn distinct_owners_get_distinct_sessions() {
+        let registry = SessionRegistry::default();
+        let a = registry.issue("local-operator:a").unwrap();
+        let b = registry.issue("local-operator:b").unwrap();
+        assert_ne!(a, b);
+        registry.witness(&a, "dem").unwrap();
+        assert!(registry.consume(&b, "local-operator:b").unwrap().is_empty());
     }
 
     #[test]

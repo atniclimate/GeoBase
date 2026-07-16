@@ -508,9 +508,12 @@ fn publish(
     }
 
     // Step 3 — revalidate consent at the publication point (§10), then
-    // seal exactly one ceremony + one t2 row, `prepared`, in ONE txn.
-    let revalidated_sequence = match gate.revalidate(auth, &record) {
-        Ok(sequence) => sequence,
+    // seal exactly one ceremony + one t2 row, `prepared`, in ONE txn. The
+    // returned guard HOLDS the consent store's publication lock (review
+    // B3 F3): no consent write can commit between this snapshot and the
+    // durable seal below — the guard is dropped only after `tx.commit()`.
+    let publication_guard = match gate.revalidate_for_publication(auth, &record) {
+        Ok(guard) => guard,
         Err(ceremony_error) => {
             return Err(record_gate_failure(
                 cipher,
@@ -523,6 +526,7 @@ fn publish(
             ));
         }
     };
+    let revalidated_sequence = publication_guard.sequence;
     let area_m2_total: f64 = areas.iter().sum();
     let tx = ledger
         .conn()
@@ -570,6 +574,11 @@ fn publish(
     // Durable seal: the ledger connection runs synchronous=FULL (set at
     // open), so this commit is the §6 step-3 seal.
     tx.commit().map_err(geobase_gpkg::GpkgError::from)?;
+    // The seal is durable — release the consent store's publication lock
+    // (design §10, review B3 F3). A revocation may commit from here on;
+    // it governs the NEXT export, and this one's sealed row records the
+    // exact sequence it published under.
+    drop(publication_guard);
     if crash == Some(CrashPoint::Prepared) {
         return Err(ExportError::SimulatedCrash("prepared"));
     }
@@ -1831,8 +1840,16 @@ mod tests {
             &requester,
         )
         .unwrap_err();
-        assert!(matches!(err, ExportError::Refused(_)));
-        assert!(err.to_string().contains("expired"));
+        // EXACT assertion (review B3 F9): the refusal error carries the
+        // instant the expiry comparison used…
+        let ExportError::Refused(geobase_gpkg::ceremony::ExportRefused::Declined {
+            reason,
+            observed_at: Some(decision_instant),
+        }) = &err
+        else {
+            panic!("expected Declined with an observed_at instant, got: {err}");
+        };
+        assert!(reason.contains("expired"));
 
         let trail = trail(&exports);
         let refused: Vec<_> = trail
@@ -1840,9 +1857,13 @@ mod tests {
             .filter(|r| r.action == "export.refused")
             .collect();
         assert_eq!(refused.len(), 1, "exactly one refusal row");
-        assert!(
-            refused[0].details["observed_at"].is_string(),
-            "the refusal row must carry the instant the expiry comparison used"
+        // …and the audit row's observed_at EQUALS that instant — the
+        // trail proves WHICH time made the decision, not merely that a
+        // time was written.
+        assert_eq!(
+            refused[0].details["observed_at"].as_str().unwrap(),
+            decision_instant.to_rfc3339(),
+            "the refusal row must carry the exact instant the expiry comparison used"
         );
     }
 

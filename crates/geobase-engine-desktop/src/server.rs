@@ -40,7 +40,7 @@
 //! it does not hoard).
 
 use std::net::SocketAddr;
-use std::path::{Path as FsPath, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, Request, State};
@@ -570,10 +570,25 @@ async fn api_pack_layers(
         );
     };
 
-    // Re-resolve the pack's CURRENT tier from the artifact (review B3
-    // F1a) — a pack reclassified up while the node runs must not still be
-    // served at its boot-cached tier.
-    let tier = crate::vault::current_effective_tier(&entry.path);
+    // ONE open for the whole serve (review B3 F1a/F1b): the CURRENT tier
+    // is re-resolved from the artifact — never the boot-cached hint — and
+    // the layer data is read from the SAME handle, so a file swapped
+    // between check and use cannot be served at a stale tier. An artifact
+    // that cannot be opened is T3 (fail-closed).
+    let gpkg = match GeoPackage::open(&entry.path) {
+        Ok(gpkg) => gpkg,
+        Err(_) => {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                json!({
+                    "tier": Tier::T3.code(),
+                    "reason": "requires the Phase 1.2 permissions ceremony",
+                }),
+                Some(Tier::T3),
+            );
+        }
+    };
+    let tier = crate::vault::effective_tier_of(&gpkg);
     if !matches!(tier, Tier::T0 | Tier::T1) {
         return status_json(
             StatusCode::FORBIDDEN,
@@ -591,7 +606,7 @@ async fn api_pack_layers(
         return refused;
     }
 
-    match layer_metadata(&entry.path, &entry.id, tier, &entry.tables) {
+    match layer_metadata(&gpkg, &entry.id, tier, &entry.tables) {
         Ok(layers) => status_json(
             StatusCode::OK,
             json!({
@@ -997,8 +1012,23 @@ async fn api_pack_table_features(
         );
     };
 
-    // Re-resolve the pack's CURRENT tier from the artifact (review B3 F1a).
-    let tier = crate::vault::current_effective_tier(&entry.path);
+    // ONE open for the whole serve (review B3 F1a/F1b): CURRENT tier and
+    // feature data both come from this handle — check and use cannot be
+    // split across a file swap. Unopenable → T3 (fail-closed).
+    let gpkg = match GeoPackage::open(&entry.path) {
+        Ok(gpkg) => gpkg,
+        Err(_) => {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                json!({
+                    "tier": Tier::T3.code(),
+                    "reason": "requires the Phase 1.2 permissions ceremony",
+                }),
+                Some(Tier::T3),
+            );
+        }
+    };
+    let tier = crate::vault::effective_tier_of(&gpkg);
     let Some(table_info) = entry.tables.iter().find(|info| info.name == table) else {
         return status_json(
             StatusCode::NOT_FOUND,
@@ -1037,7 +1067,7 @@ async fn api_pack_table_features(
         return refused;
     }
 
-    match feature_collection(entry.path.clone(), &table) {
+    match feature_collection(&gpkg, &table) {
         Ok(collection) => status_json(StatusCode::OK, collection, Some(tier)),
         Err(err) => status_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1047,13 +1077,15 @@ async fn api_pack_table_features(
     }
 }
 
+/// Layer metadata from an ALREADY-OPEN artifact handle — the caller reads
+/// the tier from the same `gpkg` (review B3 F1b: one open, check/use
+/// coherent).
 fn layer_metadata(
-    path: &FsPath,
+    gpkg: &GeoPackage,
     pack_id: &str,
     pack_tier: Tier,
     tables: &[crate::vault::TableInfo],
 ) -> Result<Vec<Value>, String> {
-    let gpkg = GeoPackage::open(path).map_err(|err| err.to_string())?;
     let tags = gpkg.read_tsdf_tags().map_err(|err| err.to_string())?;
     let mut layers = Vec::new();
     for table in tables.iter().filter(|table| table.data_type == "features") {
@@ -1063,7 +1095,7 @@ fn layer_metadata(
             .map(|tag| tag.tier)
             .max()
             .unwrap_or(pack_tier);
-        let info = gpkg_layer_info(&gpkg, &table.name)?;
+        let info = gpkg_layer_info(gpkg, &table.name)?;
         layers.push(json!({
             "table": table.name,
             "geometry_type": info.geometry_type,
@@ -1127,9 +1159,11 @@ fn layer_color_seed(pack_id: &str, table: &str) -> u32 {
     u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]])
 }
 
-fn feature_collection(path: PathBuf, table: &str) -> Result<Value, String> {
-    let gpkg = GeoPackage::open(&path).map_err(|err| err.to_string())?;
-    let columns = feature_columns(&gpkg, table)?;
+/// Feature data from an ALREADY-OPEN artifact handle — the caller checked
+/// the tier on the same `gpkg` (review B3 F1b: one open, check/use
+/// coherent).
+fn feature_collection(gpkg: &GeoPackage, table: &str) -> Result<Value, String> {
+    let columns = feature_columns(gpkg, table)?;
     let sql = feature_select_sql(table, &columns);
     let mut stmt = gpkg.conn().prepare(&sql).map_err(|err| err.to_string())?;
     let rows = stmt
@@ -1677,13 +1711,14 @@ mod tests {
         assert!(!exports.join("infra-blocked").exists(), "no product bytes");
     }
 
-    /// Review B3 F2/F9: the session-substitution / omitted-pack attack.
-    /// A client serves a T1 pack in session A, then exports naming a
-    /// DIFFERENT, freshly-minted session B that witnessed nothing. The
-    /// export source set is session B's record (empty) → T3 floor → 403,
-    /// no product. The pack fetched in A cannot be smuggled through B.
-    /// Also proves the serve-required rule: fetching feature data WITHOUT
-    /// a session on an export-enabled node is refused.
+    /// Review B3 F2/F9: the session-substitution / omitted-pack attack is
+    /// closed STRUCTURALLY — issuance is idempotent per operator, so a
+    /// "different" session B for the same operator IS session A (asserted
+    /// below): every serve accumulates into the one open session and the
+    /// export can neither name a fresher, emptier record nor an unknown
+    /// one (refused outright). Also proves the serve-required rule:
+    /// fetching feature data WITHOUT a session on an export-enabled node
+    /// is refused.
     #[tokio::test]
     async fn session_substitution_and_serveless_fetch_are_refused() {
         let entry = create_pack("subst-t1.gpkg", Some(Tier::T1));
@@ -1750,9 +1785,17 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // Export names a DIFFERENT empty session B → empty source set → T3
-        // floor → 403. The A-witnessed pack is not smuggled through B.
+        // "Different" session B for the same operator IS session A —
+        // issuance is idempotent per owner (review B3 F2), so the serve
+        // above cannot be split away from the session an export names.
         let session_b = new_session().await;
+        assert_eq!(
+            session_a, session_b,
+            "one live session per operator: substitution is structurally impossible"
+        );
+
+        // A fabricated NONEMPTY session id this boot never issued is
+        // refused outright — there is no third way to name a source set.
         let response = app
             .clone()
             .oneshot(
@@ -1762,7 +1805,7 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "product": "smuggled",
-                            "session": session_b,
+                            "session": "00000000000000000000000000000000",
                             "features": [{
                                 "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
                                 "score": 1.0
@@ -1779,8 +1822,328 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        assert!(reason.contains("never leaves the node"), "{reason}");
+        assert!(reason.contains("session"), "{reason}");
         assert!(!exports.join("smuggled").exists());
+    }
+
+    /// Review B3 F2/F9: the REAL omitted-pack attack, with a NONEMPTY,
+    /// otherwise-authorizable second session. A consent agreement covers
+    /// only the low-governance pack; the client serves the HIGHER-
+    /// governance (uncovered) pack, then tries to "start fresh" and serve
+    /// only the covered pack before exporting. Because issuance is
+    /// idempotent per operator, the second session is the first — the
+    /// uncovered pack stays in the node-witnessed source set and the
+    /// sovereign gate refuses (no agreement covers the full set). The
+    /// covered-only positive control passes after the session cycles.
+    #[tokio::test]
+    async fn nonempty_session_substitution_cannot_omit_a_served_pack() {
+        use geobase_gpkg::consent::{Conditions, ConsentBasis, Sha256Digest, UtcInstant};
+        use geobase_gpkg::consent_store::{AgreementKind, AgreementRecord, ConsentStore};
+
+        // The covered pack carries a real feature table — the positive
+        // control's export re-opens it for the republish check.
+        let covered = {
+            let path = temp_path("nonempty-covered.gpkg");
+            let gpkg = GeoPackage::create(&path).unwrap();
+            create_feature_table(
+                &gpkg,
+                &FeatureTableSpec {
+                    table: "capacity".into(),
+                    identifier: "Capacity".into(),
+                    srs_epsg: 4326,
+                    srs_definition: None,
+                    geometry_type: "POLYGON".into(),
+                    columns: Vec::new(),
+                    bounds: (0.0, 0.0, 1.0, 1.0),
+                },
+            )
+            .unwrap();
+            gpkg.write_tsdf_tag(&TsdfTag {
+                table: None,
+                tier: Tier::T0,
+                tsdf_version: "0.9.4".into(),
+                tsdf_source_origin: "vendored:embedded".into(),
+                classified_by: "test".into(),
+                extras: Map::new(),
+            })
+            .unwrap();
+            drop(gpkg);
+            CatalogEntry {
+                id: path.file_stem().unwrap().to_string_lossy().into_owned(),
+                path,
+                tier: Tier::T0,
+                tagged: true,
+                tsdf_version: Some("0.9.4".into()),
+                tables: vec![TableInfo {
+                    name: "capacity".into(),
+                    data_type: "features".into(),
+                }],
+            }
+        };
+        let uncovered = create_pack("nonempty-uncovered.gpkg", Some(Tier::T1));
+        let covered_id = covered.id.clone();
+        let uncovered_id = uncovered.id.clone();
+        let exports = temp_path("nonempty-exports");
+        std::fs::create_dir_all(&exports).unwrap();
+
+        // The recorded agreement covers ONLY the low-governance pack.
+        let operator_identity = interim_operator_identity();
+        let store = ConsentStore::open_or_create(
+            &exports,
+            "0.9.4",
+            "vendored:test",
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+        )
+        .unwrap();
+        let now = UtcInstant::now().unwrap();
+        store
+            .record_agreement(
+                &AgreementRecord {
+                    agreement_id: "covers-low-only".into(),
+                    kind: AgreementKind::TribalSigned,
+                    source_scope: vec![covered_id.clone()],
+                    product_class: "painted-opportunity-shapefile".into(),
+                    evidence: ConsentBasis::signed_agreement(
+                        "agreements/low.pdf",
+                        Sha256Digest::from_hex(&"ab".repeat(32)).unwrap(),
+                        now,
+                        now,
+                    )
+                    .unwrap(),
+                    authority_of_record: "Example Signatory, Example Nation".into(),
+                    requester_binding: operator_identity.clone(),
+                    conditions: Conditions::default(),
+                    recorded_by: operator_identity,
+                },
+                &[],
+                false,
+            )
+            .unwrap();
+        drop(store);
+
+        let app = router(
+            test_node(vec![covered, uncovered]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("nonempty-token".into()),
+                ..ServerConfig::default()
+            },
+        );
+        let new_session = || {
+            let app = app.clone();
+            async move {
+                let r = app
+                    .oneshot(
+                        Request::post("/api/sessions")
+                            .header(header::HOST, "127.0.0.1")
+                            .header(EXPORT_TOKEN_HEADER, "nonempty-token")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                json_response(r).await["session"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            }
+        };
+        let serve = |session: String, id: String| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::get(format!("/api/packs/{id}/layers"))
+                        .header(header::HOST, "127.0.0.1")
+                        .header(crate::session::SESSION_HEADER, session)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+            }
+        };
+        let export = |session: String, product: &'static str| {
+            let app = app.clone();
+            async move {
+                let r = app
+                    .oneshot(
+                        Request::post("/api/export")
+                            .header("content-type", "application/json")
+                            .header(EXPORT_TOKEN_HEADER, "nonempty-token")
+                            .body(Body::from(
+                                json!({
+                                    "product": product,
+                                    "session": session,
+                                    "features": [{
+                                        "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
+                                        "score": 1.0
+                                    }]
+                                })
+                                .to_string(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                (r.status(), json_response(r).await)
+            }
+        };
+
+        // Session A witnesses the HIGHER-governance (uncovered) pack…
+        let session_a = new_session().await;
+        assert_eq!(
+            serve(session_a.clone(), uncovered_id.clone()).await,
+            StatusCode::OK
+        );
+        // …the attacker "starts a fresh session" and serves only the
+        // covered pack — but B IS A (idempotent issuance), NONEMPTY and
+        // otherwise authorizable for {covered} alone.
+        let session_b = new_session().await;
+        assert_eq!(session_a, session_b, "no second live session exists");
+        assert_eq!(
+            serve(session_b.clone(), covered_id.clone()).await,
+            StatusCode::OK
+        );
+        // Export under "B": the node's record is {uncovered, covered} —
+        // the agreement does not cover the full witnessed set → 403
+        // governance refusal, no product.
+        let (status, body) = export(session_b, "omit-attempt").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(
+            body["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no recorded agreement"),
+            "{body}"
+        );
+        assert!(!exports.join("omit-attempt").exists());
+
+        // Positive control: the consumed session cycles; a genuinely new
+        // session serving ONLY the covered pack exports successfully.
+        let session_c = new_session().await;
+        assert_ne!(session_c, session_a, "consume closed the old session");
+        assert_eq!(
+            serve(session_c.clone(), covered_id.clone()).await,
+            StatusCode::OK
+        );
+        let (status, body) = export(session_c, "covered-product").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(exports.join("covered-product").is_dir());
+    }
+
+    /// Review B3 F1b/F9: serve check/use consistency. Tier and data are
+    /// read from ONE open artifact handle per request, so whichever
+    /// artifact currently sits at the catalog path governs BOTH — a swap
+    /// can move a request wholly onto the new artifact (new tier + new
+    /// data) but can never mix a stale low tier with new bytes. Proven by
+    /// swapping the artifact between requests: the T3 replacement is
+    /// refused with nothing leaked; a second T0 replacement serves ONLY
+    /// the replacement's own features.
+    #[tokio::test]
+    async fn serve_tier_and_data_come_from_the_same_artifact_open() {
+        fn point_pack_file(path: &std::path::Path, tier: Tier, label: &str) {
+            let gpkg = GeoPackage::create(path).unwrap();
+            create_feature_table(
+                &gpkg,
+                &FeatureTableSpec {
+                    table: "sites".into(),
+                    identifier: "Sites".into(),
+                    srs_epsg: 4326,
+                    srs_definition: None,
+                    geometry_type: "POINT".into(),
+                    columns: vec![geobase_gpkg::vector::ColumnDef {
+                        name: "label".into(),
+                        sql_type: "TEXT",
+                    }],
+                    bounds: (-123.5, 48.7, -123.4, 48.8),
+                },
+            )
+            .unwrap();
+            gpkg.conn()
+                .execute(
+                    "INSERT INTO sites (geom, label) VALUES (?1, ?2)",
+                    (&gpkg_point_blob(-123.45, 48.75), label),
+                )
+                .unwrap();
+            gpkg.write_tsdf_tag(&TsdfTag {
+                table: None,
+                tier,
+                tsdf_version: "0.9.4".into(),
+                tsdf_source_origin: "vendored:embedded".into(),
+                classified_by: "test".into(),
+                extras: Map::new(),
+            })
+            .unwrap();
+        }
+        let path = temp_path("swap-target.gpkg");
+        point_pack_file(&path, Tier::T0, "ORIGINAL_T0");
+        let entry = CatalogEntry {
+            id: path.file_stem().unwrap().to_string_lossy().into_owned(),
+            path: path.clone(),
+            tier: Tier::T0,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![TableInfo {
+                name: "sites".into(),
+                data_type: "features".into(),
+            }],
+        };
+        let id = entry.id.clone();
+        // Viewer-only node: no session machinery in the way of the swap.
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+        let fetch = |suffix: &'static str| {
+            let app = app.clone();
+            let id = id.clone();
+            async move {
+                let r = app
+                    .oneshot(
+                        Request::get(format!("/api/packs/{id}/{suffix}"))
+                            .header(header::HOST, "127.0.0.1")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = r.status();
+                let raw = to_bytes(r.into_body(), usize::MAX).await.unwrap();
+                (status, String::from_utf8_lossy(&raw).into_owned())
+            }
+        };
+
+        // The original T0 artifact serves its own features.
+        let (status, body) = fetch("tables/sites/features").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("ORIGINAL_T0"), "{body}");
+
+        // Swap in a T3-tagged artifact at the SAME catalog path: the very
+        // next request reads tier AND data from the replacement — refused,
+        // nothing leaked.
+        std::fs::remove_file(&path).unwrap();
+        point_pack_file(&path, Tier::T3, "SWAPPED_T3_SENTINEL");
+        let (status, body) = fetch("tables/sites/features").await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "the swapped artifact's CURRENT tier governs the serve"
+        );
+        assert!(!body.contains("SWAPPED_T3_SENTINEL"), "{body}");
+        let (status, body) = fetch("layers").await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(
+            !body.contains("sites") || !body.contains("layers\":"),
+            "{body}"
+        );
+
+        // Swap in a DIFFERENT T0 artifact: the serve reflects exactly the
+        // new artifact — tier and features from the same open.
+        std::fs::remove_file(&path).unwrap();
+        point_pack_file(&path, Tier::T0, "REPLACEMENT_T0");
+        let (status, body) = fetch("tables/sites/features").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("REPLACEMENT_T0"), "{body}");
+        assert!(!body.contains("ORIGINAL_T0"), "{body}");
     }
 
     /// [EGRESS-GATE A5] The T3 export ledger AND the T3 consent store are

@@ -226,6 +226,39 @@ pub enum CeremonyError {
     Infrastructure { reason: String },
 }
 
+/// The result of a publication-point revalidation (design §10, review B3
+/// F3): the consent-store sequence observed at the publication point,
+/// plus — for a gate with a consent store — a held store lock that keeps
+/// any consent write from committing until the export pipeline's ledger
+/// seal. The pipeline holds this guard across the seal and drops it
+/// immediately after; a store-less gate returns an unlocked guard.
+#[derive(Debug)]
+pub struct PublicationGuard {
+    /// The consent-store sequence at the publication point (`Some` for a
+    /// sovereign gate; `None` for a store-less gate).
+    pub sequence: Option<i64>,
+    _lock: Option<crate::consent_store::ConsentStoreLock>,
+}
+
+impl PublicationGuard {
+    /// A guard without a held lock (store-less gates).
+    pub fn unlocked(sequence: Option<i64>) -> Self {
+        Self {
+            sequence,
+            _lock: None,
+        }
+    }
+
+    /// A guard holding the consent store's publication lock through the
+    /// ledger seal.
+    pub fn locked(sequence: Option<i64>, lock: crate::consent_store::ConsentStoreLock) -> Self {
+        Self {
+            sequence,
+            _lock: Some(lock),
+        }
+    }
+}
+
 /// The seam. The export pipeline is generic over it and cannot tell
 /// implementations apart except through the record they return.
 pub trait CeremonyGate {
@@ -254,6 +287,21 @@ pub trait CeremonyGate {
         _record: &CeremonyRecord,
     ) -> Result<Option<i64>, CeremonyError> {
         Ok(None)
+    }
+
+    /// Revalidate at the publication point AND return a guard the export
+    /// pipeline holds across the ledger seal (design §10, review B3 F3).
+    /// A gate with a consent store must acquire the store's publication
+    /// lock BEFORE revalidating and carry it in the guard, so no consent
+    /// change can commit between the revalidation snapshot and the seal.
+    /// The default wraps [`CeremonyGate::revalidate`] with no lock — only
+    /// a gate with a consent store has anything to serialize.
+    fn revalidate_for_publication(
+        &self,
+        auth: &ExportAuthorization<'_>,
+        record: &CeremonyRecord,
+    ) -> Result<PublicationGuard, CeremonyError> {
+        Ok(PublicationGuard::unlocked(self.revalidate(auth, record)?))
     }
 }
 
