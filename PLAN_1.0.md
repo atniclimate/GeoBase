@@ -81,7 +81,9 @@ oracle), and a CesiumJS heavy-3D path (Option A — documented escalation only).
 > overnight build landed several items this section and the Phase A/C task
 > lists below were written *before*. Reconciled here per this plan's own update
 > rule (§ "When to update this plan"), **without** changing acceptance status:
-> DG-1 stays open, `docs/RELEASE-DEFINITION.md` stays DRAFT, and Phases 1.2/1.3
+> DG-1 stays open, `docs/RELEASE-DEFINITION.md` stays DRAFT *(true when this
+> note was written; superseded later the same day — see the owner-sitting
+> note below)*, and Phases 1.2/1.3
 > stay **not** accepted-complete. What changed:
 > - **Phase A (A1–A7) is BUILT and merged to local `main`** (not pushed) — the
 >   interim export-token guard *and* the real RStep 1.3d harness
@@ -102,6 +104,25 @@ oracle), and a CesiumJS heavy-3D path (Option A — documented escalation only).
 >   full acquire→GeoPack round-trip; MB1 not complete).
 > The milestone table (M1–M8) is unchanged in intent; no milestone is marked
 > reached, because acceptance is reserved and DG-1 is open.
+
+> **Reconciliation note (2026-07-16 owner sitting — later the same day).**
+> The owner sat on every open decision gate and the B2 decision table
+> (`docs/DECISIONS.md` 2026-07-16, four dated owner entries):
+> - **DG-1 is RATIFIED** — `docs/RELEASE-DEFINITION.md` accepted as written,
+>   status flipped; the sovereignty-core 1.0 line now governs. P0.1 is
+>   closed; Phase 0 is complete; **M0 has landed.**
+> - **B2 is RESOLVED** — the sovereign ceremony mechanism is designed and
+>   ratified: `docs/CEREMONY-DESIGN.md` (design of record; the DRAFT
+>   proposal is superseded-marked). B3 gains the consent store, session
+>   provenance, lineage matching, and the recoverable publication protocol;
+>   B5 gains the OS-peer-identity boundary (LocalOperator-only in 1.0).
+> - **DG-2 is CONFIRMED** — bounded pure-Rust envelope for the two T3
+>   metadata stores (B4), plus **B4b** (plaintext staging closure) inserted
+>   as condition precedent to B6/B8. Enumerated cipher constraints ratified
+>   (`docs/THREAT-MODEL-1.2.md` §3, now tracked).
+> - **DG-3 is DEFERRED** to MB2.1 activation, by recorded decision.
+> Acceptance status is UNCHANGED: `ProvisionalDevGate` is still the only
+> composed gate; ROADMAP 1.2/1.3 stay not-accepted until B8.
 
 Per tracked `docs/ROADMAP.md`, five phases are accepted-complete with observed
 gates and committed evidence: scaffold/spine (0.1), local-source 3D terrain
@@ -186,9 +207,9 @@ untracked file the original count missed — recorded in `docs/DECISIONS.md`
 GEOBASE-* docs under SUPERSEDED banners); `README.md` no longer restates a
 phase inline and points at `docs/ROADMAP.md`; tracked `ROADMAP.md` 2.1 keeps
 "optional native Rust/`wgpu`" with a note that the superseded directive's
-deck.gl direction is backlog material only. What remains open from Phase 0 is
-exactly **P0.1's ratification act** — `docs/RELEASE-DEFINITION.md` is committed
-in DRAFT status, awaiting Patrick.
+deck.gl direction is backlog material only. P0.1's ratification act —
+formerly the one open Phase 0 item — **occurred 2026-07-16**:
+`docs/RELEASE-DEFINITION.md` is RATIFIED and Phase 0 is complete.
 
 Federation (2.0) is a placeholder (`spec/fidp/README.md`, "Not yet
 implemented."); 2.1/2.2 are unstarted.
@@ -210,11 +231,23 @@ also involves an external authority that is called out.
 | **DG-5** | Author | Execute the MANIFEST.md repo reorganization? | **Defer to post-1.0**; record accept/defer/reject explicitly before the tag so 1.0 ships on a settled layout | The reorg touches every workspace manifest, script, workflow, and doc link — pure churn risk on the critical path | Nothing on the critical path; final disposition confirmed at C8 pre-tag |
 | **DG-6** | Author + IRB | What is "security review passed" for 1.0? | **Local adversarial-egress suite green across every T3-producing and serving path + IRB track documented** (per `governance-config.yaml` `security_review`), with `ROADMAP.md` 2.2's unqualified "security review passed" wording amended to match | The tracked config explicitly says "Do not halt execution waiting for security sign-off. Ensure adversarial egress tests pass locally." — reconcile the two tracked docs one way or the other | The `v1.0.0` tag (C7) |
 
-**DG-1 status (2026-07-11):** `docs/RELEASE-DEFINITION.md` is committed
-encoding exactly this default, but in **DRAFT** status — drafted by Claude
-Code per P0.1, not yet ratified by Patrick. DG-1 stays **open** until Patrick
-either ratifies the draft as written or records an override; see the file's
-own "Ratification record" section and `docs/DECISIONS.md` 2026-07-11.
+**DG-1 status (2026-07-16): RESOLVED — RATIFIED.** Patrick accepted
+`docs/RELEASE-DEFINITION.md` as written at the 2026-07-16 owner sitting;
+the file's status line reads RATIFIED with the owner date, backed by the
+matching dated `docs/DECISIONS.md` entry. *(History: committed in DRAFT
+2026-07-11 per P0.1; ratification was the one act reserved to the owner.)*
+
+**DG-2 status (2026-07-16): RESOLVED — CONFIRMED.** Pure-Rust
+XChaCha20-Poly1305 + Argon2id whole-file envelope for the two bounded T3
+metadata artifacts (export ledger + consent store), passphrase-primary,
+anti-rollback sequence headers, defined export linearization — plus
+**B4b**, the plaintext-staging closure, inserted as a condition precedent
+to B6/B8. See `docs/DECISIONS.md` 2026-07-16 and
+`docs/CEREMONY-DESIGN.md` §10.
+
+**DG-3 status (2026-07-16): DEFERRED by recorded decision** to MB2.1
+activation — fresh pin + license/file inventory refresh there; the S1
+spike stands as evidence, not a decision (`docs/DECISIONS.md` 2026-07-16).
 
 **DG-5 status (2026-07-11):** disposition recorded as **deferred to
 post-1.0** (the default) in `docs/DECISIONS.md` 2026-07-11, per P0.7. No
@@ -246,7 +279,7 @@ commit that introduces the disagreement.
 
 | Subject | Single source of truth | This plan's role |
 |---|---|---|
-| The 1.0 line / scope | `docs/RELEASE-DEFINITION.md` (once its status reads **RATIFIED** — DRAFT does not confer authority); until then, this plan's 1.0 Definition + DG-1 | Executes it; must not redefine it |
+| The 1.0 line / scope | `docs/RELEASE-DEFINITION.md` — status reads **RATIFIED** (2026-07-16), so the file now confers authority | Executes it; must not redefine it |
 | Phase acceptance status | `docs/ROADMAP.md` (authoritative), mirrored in `docs/PROCESS-MAP.md` §8 | Reports it; never asserts a phase complete that ROADMAP does not |
 | Decisions + rationale | `docs/DECISIONS.md` (append-only, dated) | Cites decisions; DG resolutions land there |
 | Process / component map | `docs/PROCESS-MAP.md` | Points at it for "what runs where" |
@@ -324,7 +357,7 @@ fresh before touching `RELEASE-DEFINITION.md`.
 **Verification mechanism.** Blocking `ci.yml` stays green (doc-only commits);
 the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
 
-- [ ] **P0.1 — Ratify DG-1.** Write `docs/RELEASE-DEFINITION.md` encoding the
+- [x] **P0.1 — Ratify DG-1.** Write `docs/RELEASE-DEFINITION.md` encoding the
   sovereignty-core default (or the owner's override), the source-of-truth
   hierarchy, and the acceptance-integrity rule (a gate is accepted once, against
   the final mechanism).
@@ -336,12 +369,13 @@ the congruence grep across `README.md`/`ROADMAP.md`/`PROCESS-MAP.md` passes.
     `git ls-files` is **not** sufficient evidence — a committed DRAFT does not
     resolve DG-1.
   - *Deps:* none (root of Phase 0).
-  - **Status 2026-07-11: PARTIALLY EXECUTED — awaiting Patrick.** The draft is
-    written and committed (`docs/RELEASE-DEFINITION.md`, status DRAFT; see
-    `docs/DECISIONS.md` 2026-07-11 "DG-1 draft recorded; ratification
-    pending"). The ratification act itself is reserved to the owner and has
-    not occurred. This box stays unchecked until Patrick records RATIFIED (or
-    an override); Phase 0 therefore remains **open on this item alone**.
+  - **Status 2026-07-16: EXECUTED — RATIFIED by Patrick.** The owner
+    accepted the draft as written at the 2026-07-16 sitting; the status
+    line reads RATIFIED with the owner date, the matching dated
+    `docs/DECISIONS.md` entry exists, and DG-1 is marked resolved above.
+    Phase 0 is now **complete**. *(History: draft written and committed
+    2026-07-11 in DRAFT status; the ratification act was reserved to the
+    owner.)*
 - [x] **P0.2 — Commit or supersede the untracked docs.** `MANIFEST.md`,
   `PLAN_1.0.md`, `docs/GEOBASE-BUILD-DIRECTIVE.md`,
   `docs/GEOBASE-DIGITAL-TWIN-FEATURES.md` each get a status header consistent
@@ -415,9 +449,11 @@ in `docs/RELEASE-DEFINITION.md` (plus the matching dated `docs/DECISIONS.md`
 ratification entry) — a committed DRAFT does not meet this criterion.
 **→ M0.**
 
-> **Phase 0 status, 2026-07-11: complete except P0.1 (awaiting Patrick).**
-> P0.2-P0.7 are executed and committed; the exit criteria are unmet on exactly
-> one point — DG-1 ratification. M0 has **not** landed; Phase A may not start.
+> **Phase 0 status, 2026-07-16: COMPLETE.** P0.2–P0.7 executed 2026-07-11;
+> P0.1 (DG-1 ratification) executed by the owner 2026-07-16. The exit
+> criteria are met; **M0 has landed.** *(The 2026-07-16 overnight build ran
+> Phase A before this ratification under a deliberate, recorded owner
+> sequencing interruption — see `docs/DECISIONS.md` 2026-07-16.)*
 
 ### Phase A — Interim export guard + RStep gate harness (build, don't accept)
 
@@ -535,14 +571,29 @@ unconditionally; provisional basis never emitted by a sovereign gate) per
 `docs/CEREMONY-GATE.md`; the blocking Rust suite; the new adversarial-egress
 suite; the Phase A harness re-run asserting the sovereign ceremony record.
 
-- [ ] **B1 — DG-2 cipher spike (condition precedent to B4).** One sitting:
+> **Phase B scope note (2026-07-16 owner sitting).** B1 and B2 are done
+> (below). The ratified mechanism is `docs/CEREMONY-DESIGN.md` — it
+> **adds scope** to the remaining items beyond their original one-line
+> descriptions: **B3** also builds the consent store (design §3), the
+> node-witnessed export-session provenance (§4), lineage-head matching
+> (§5.2), the governance-vs-infrastructure refusal split (§5.3), and the
+> recoverable publication protocol (§6), with the recorded breaking seam
+> replacement (§2.4). **B4** implements the confirmed DG-2 envelope for
+> BOTH bounded stores (§10); a new item **B4b** (below) closes the
+> plaintext staging paths before B6/B8. **B5** is LocalOperator-only with
+> the OS-keychain credential AND the OS-peer-identity boundary (§7).
+> **B8** asserts `EXPECT_PROCESS` and `EXPECT_BASIS` independently (§8).
+
+- [x] **B1 — DG-2 cipher spike (condition precedent to B4).** One sitting:
   candidate matrix (pure-Rust options vs SQLCipher) covering dependency posture,
   key management, migration, backup, failure semantics, and the recorded
   deliberately-unrecoverable lost-key policy.
   - *Touches:* `docs/DECISIONS.md` (new dated entry); the DG-2 row.
   - *Verify:* decision + numbers committed to `docs/DECISIONS.md`; DG-2 resolved.
   - *Deps:* M0 (spike may run any time after Phase 0; must precede B4).
-- [ ] **B2 — Ceremony process design (owner authority).** Design the sovereign
+  - **Executed:** spike recorded 2026-07-16 (overnight); **DG-2 CONFIRMED by
+    the owner 2026-07-16** (sitting) — see the DG-2 status above.
+- [x] **B2 — Ceremony process design (owner authority).** Design the sovereign
   FPIC process against `governance-config.yaml` semantics (signed tribal
   agreement / witnessed individual consent; the FPIC boolean gates T2 *product*
   export only — T3 has no export path to gate, ever). The mechanism is
@@ -552,6 +603,10 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
   - *Verify:* design recorded with the contract-test list it must satisfy
     (the seven CEREMONY-GATE clauses).
   - *Deps:* M0.
+  - **Executed 2026-07-16 (owner sitting):** `docs/CEREMONY-DESIGN.md`
+    RATIFIED (contract-test list in its §11; clauses 2/5 amended there);
+    `docs/THREAT-MODEL-1.2.md` tracked; the DRAFT proposal superseded;
+    decisions recorded in `docs/DECISIONS.md` 2026-07-16.
 - [ ] **B3 — Sovereign `CeremonyGate`.** Implement it; swap at the single
   composition point in `server.rs` `router()`, nowhere else.
   - *Touches:* new impl in `crates/geobase-gpkg/src/ceremony.rs` (or a sibling
@@ -571,6 +626,20 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
   - *Verify:* cipher unit tests + ledger write-path test; the fail-closed
     contract test still green; release build refuses the dev-plaintext path.
   - *Deps:* B1.
+- [ ] **B4b — Plaintext T3 staging closure (condition precedent to B6/B8;
+  added 2026-07-16).** Close the recorded plaintext staging paths —
+  `ingest()` and `package()` write plaintext staging GPKGs for
+  default/explicit-T3 inputs, bypassing the cipher seam (`docs/DECISIONS.md`
+  2026-07-16 DG-2 spike). The large-artifact backend is decided here (the
+  page-level/VFS question may re-open, bounded to this case) — the B4
+  whole-file envelope is confirmed for the two small metadata stores only
+  and must not silently expand.
+  - *Touches:* `crates/geobase-ingestor` staging paths; possibly a new
+    storage abstraction; failure-injection tests for large artifacts.
+  - *Verify:* no code path writes plaintext T3 staging; temp/WAL/journal
+    leakage reviewed; the "no plaintext T3 at rest" claim is true across
+    every path before B6/B8 run.
+  - *Deps:* B4 (and its backend decision).
 - [ ] **B5 — Requester authentication.** Per-app tokens (already flagged in the
   1.0 loopback decision — `docs/DECISIONS.md` 2026-07-06 "per-app tokens arrive
   with the Phase 1.2 ceremony work"); extend `ExportAuthorization` with identity
@@ -587,7 +656,7 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     `geobase-gpkg`); `.github/workflows/ci.yml` (wired blocking — not a WebGL
     job).
   - *Verify:* suite green locally; `ci.yml` runs it as a required check.
-  - *Deps:* B3, B4, B5.
+  - *Deps:* B3, B4, B4b, B5.
 - [ ] **B7 — Runtime network-denial harness.** An observable test that the
   node's runtime/data path performs zero non-loopback network I/O (OS-level
   denial or socket audit around a full boot-serve-export cycle). Scope narrowed
@@ -606,9 +675,11 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     `PROVISIONAL_BASIS` to the sovereign process name); `docs/ROADMAP.md` (1.2 +
     1.3 rows/detail); `docs/PROCESS-MAP.md` §8; a committed evidence capture
     under `docs/verification/`.
-  - *Verify:* CI green (including `rstep-gate` asserting the sovereign record);
+  - *Verify:* CI green (including `rstep-gate` asserting the sovereign record —
+    `EXPECT_PROCESS` and `EXPECT_BASIS` asserted independently, and
+    `basis != PROVISIONAL_BASIS`);
     congruence grep; acceptance recorded exactly once.
-  - *Deps:* B3, B4, B5, B6, B7, A5 (the harness/job to re-run).
+  - *Deps:* B3, B4, B4b, B5, B6, B7, A5 (the harness/job to re-run).
 
 **Exit criteria.** T3 provably non-exportable and non-networkable under
 adversarial tests; T2 export requires a recorded agreement from an authenticated
@@ -876,7 +947,7 @@ artifact, or a recorded decision. The **Depends on** column is by milestone ID;
 
 | Milestone | Phase | Exit evidence (command output / committed artifact / recorded decision) | Depends on | Effort |
 |---|---|---|---|---|
-| **M0** — Repo congruence + DG-1 ratified | 0 | `docs/RELEASE-DEFINITION.md` status line reads **RATIFIED** with an owner date + a matching dated `docs/DECISIONS.md` ratification entry (file existence alone is NOT evidence — the file exists in DRAFT today and M0 has not landed); `git status --porcelain` shows no untracked planning docs; congruence grep across README/ROADMAP/PROCESS-MAP returns no contradiction; `verify:rstep` exits honestly | — | M |
+| **M0** — Repo congruence + DG-1 ratified | 0 | `docs/RELEASE-DEFINITION.md` status line reads **RATIFIED** with an owner date + a matching dated `docs/DECISIONS.md` ratification entry (**met 2026-07-16** — file existence alone was never the evidence; the owner ratification act was); `git status --porcelain` shows no untracked planning docs; congruence grep across README/ROADMAP/PROCESS-MAP returns no contradiction; `verify:rstep` exits honestly | — | M |
 | **M1** — Interim export guard live | A | `cargo test --workspace --locked` green with new guard tests; export without token → 403 + `export.refused` row (test asserts it) | M0 | S |
 | **M2** — RStep harness runs locally | A | `node solo/rstep/scripts/verify-rstep.mjs` produces a shapefile + ledger rows; clean pass **and** tampered-product fail both asserted | M0 | L |
 | **M3** — `rstep-gate` in CI (informational) | A | `rstep-gate` job green on `main`, labeled provisional-gate; `PROCESS-MAP.md` §8 CI-job cell filled; no acceptance claim anywhere | M2 | S |

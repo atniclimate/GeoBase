@@ -462,3 +462,179 @@ challenged by a downstream redistributor wanting per-file provenance;
 mitigated because the legacy-MIT fallback with an explicit top-level license
 is pre-approved and one decision away, and nothing is vendored until Patrick
 chooses.
+
+## 2026-07-16 — DG-1 RATIFIED: the 1.0 line is the sovereignty core (owner act)
+
+**Trigger:** owner ratification act (Patrick Freeland, 2026-07-16 sitting),
+resolving `PLAN_1.0.md` P0.1 / Decision Gate DG-1.
+
+**Decision:** `docs/RELEASE-DEFINITION.md` is **accepted as written** — no
+override, no amendment. Product-1.0 is the sovereignty core: Phases 1.2 and
+1.3 as one combined acceptance gate plus release hardening; F1–F4,
+federation, and LiDAR are serial 1.x backlog. The file's status line is
+flipped to RATIFIED and its ratification record filled in the same commit;
+the DG-1 row in `PLAN_1.0.md` is marked resolved.
+
+**Effect:** `docs/RELEASE-DEFINITION.md` is now the single authoritative
+home for the 1.0 line (its own source-of-truth hierarchy governs).
+Ratification changes no acceptance status: `ProvisionalDevGate` remains the
+only composed gate, and ROADMAP 1.2/1.3 remain not-accepted until B8.
+
+**Strongest surviving objection:** the release-hardening bar (item 3:
+signed installer CI matrix) is the heaviest, least-sovereignty-relevant
+item for a solo maintainer; the owner considered amending before ratifying
+and chose to ratify as written — trimming that bar later would itself be a
+recorded DG-1 amendment, not a quiet drift.
+
+## 2026-07-16 — B2 RESOLVED: the sovereign ceremony mechanism is decided; §4 consent evidence RE-RATIFIED richer; design of record tracked (owner acts)
+
+**Trigger:** the owner B2 sitting (Patrick Freeland, 2026-07-16): a
+question-by-question walk of the reconciled decision table (the DRAFT
+proposal's 15 rows + items surfaced by reconciliation against the
+2026-07-08 ratified schema), with an adversarial options review by
+Codex/gpt-5.6-sol (`_reviews/geobase/2026-07-16_b2-decision-options-review.md`,
+verdict: blocked as a design of record until provenance, withdrawal
+precedence, and publication recovery were specified — all three are now
+specified below). **The normative carrier of every decision here is
+`docs/CEREMONY-DESIGN.md` (RATIFIED, same date); this entry records the
+acts and the reasoning residue.**
+
+**Decisions (owner):**
+
+1. **Identity split.** `authorized_by` stays the ratified authenticated
+   `ExportIdentity`; the authority-of-record (tribal signatory / witnessed
+   consenter) becomes a separate `CeremonyRecord` field populated from the
+   agreement store, never request-supplied.
+2. **Seam replacement at B3 (breaking, deliberate).** The free-text
+   `ExportAuthorization.requester` and `CeremonyRecord.conditions:
+   Vec<String>` are REPLACED by typed fields — no deprecated free-text
+   shadow paths. `docs/CEREMONY-GATE.md` clause 2's non-breaking wording is
+   corrected in the same commit as this entry.
+3. **Conditions.** Typed `Conditions` struct; **expiry enforced
+   fail-closed in 1.0**; geography/purpose recorded-but-advisory; expiry
+   stored as a full UTC instant resolved by the human at recording time;
+   invalid/unavailable clock = infrastructure failure.
+4. **Consent store.** A separate local T3 GPKG artifact with the export
+   ledger's full treatment (reserved name, append-only triggers,
+   in-artifact tags, DG-2 envelope).
+5. **Source scope.** ID-scoped subset match with export-time tier
+   re-resolution; hashes are signing-time evidence, not match criteria;
+   accepted residual: same-tier content change does not re-trigger
+   ceremony in 1.0.
+6. **Evidence bar — §4 RE-RATIFIED richer** (owner diverged from the
+   director's store-side recommendation, deliberately): `ConsentBasis`
+   itself carries structured evidence (document ref + SHA-256 hash +
+   acknowledgment instant; witnesses + verification attestation), making
+   evidence-thin authorizations unconstructible; the `export.ceremony` row
+   is self-contained.
+7. **Record authority.** LocalOperator records; evidence-complete = active
+   immediately; revoke/supersede/correct by append (correction is
+   supersession); store-sequence ordering, never evidence timestamps.
+8. **Matching — explicit lineage head** (adopted after the adversarial
+   review REFUTED the drafted newest-wins/no-veto rule with a
+   withdrawal-becomes-reauthorization scenario): one active lineage head
+   must fully cover the source set; precedence only via recorded
+   supersession; revoking a head never falls back to ancestors;
+   independent duplicate coverage refuses; no unions in 1.0. Store
+   unavailable/corrupt = **503 infrastructure failure**, distinct from the
+   ceremony's `Declined`.
+9. **Source-set provenance — node-witnessed export sessions** (closes a
+   review-confirmed bypass: the request body supplies `source_packs`
+   today, so a caller could omit a contributing pack): the node
+   accumulates every pack it serves into an unforgeable session; the
+   export's source set is the node's record; no session → refuse.
+10. **Credentials.** 1.0 is LocalOperator-only: an OS-keychain-protected
+    signing credential bound to the OS account at enrollment, **plus an
+    OS-peer-identity boundary (Tauri IPC / named pipe)** — plain loopback
+    HTTP alone can no longer authorize an export. `TribalDelegate` stays
+    schema-present but UNISSUABLE until the owner ratifies a
+    Tribal-authority issuer ceremony (operator-issued delegation rejected
+    as a sovereignty inversion). The A1 interim token retires at B5.
+11. **Constants.** `process = "geobase-recorded-consent-check-v1"`;
+    `basis = "active recorded consent evidence matched for T2
+    derived-product export"`. B8 asserts BOTH fields independently.
+12. **Lifecycle (both T3 artifacts).** Permanent minimal proof-core;
+    identifying evidence detail is a separable schema class with owner-set
+    retention; compaction is a future explicit sovereign act (nothing
+    auto-deletes in 1.0); sealed-artifact-only backup with anti-rollback
+    sequence/head checks on restore.
+13. **Publication.** The recoverable intent → prepared (one SQLite txn,
+    both rows) → atomic namespace publish → finalize protocol; success
+    reported only after finalization; documented as recoverable atomic
+    publication, never cross-resource ACID. `docs/CEREMONY-GATE.md`'s
+    prior "same transaction discipline" claim was inaccurate against
+    shipped code (two separate appends after product write) and is
+    corrected to honest present tense in this commit.
+14. **Record graduation.** `docs/CEREMONY-DESIGN.md` (normative design of
+    record) and `docs/THREAT-MODEL-1.2.md` (edited graduation of the
+    threat model) are tracked; deliberative handoffs stay gitignored; the
+    DRAFT proposal is superseded-marked and retained as history.
+
+**Effect on the plan:** B2 is resolved. B3 gains session provenance,
+lineage matching, the consent store, and the publication protocol; B4b
+(staging closure) is inserted as condition precedent to B6/B8 (see the
+DG-2 entry below); B5 gains the OS-peer-identity boundary and
+LocalOperator enrollment; B8 asserts both constants. Acceptance status is
+unchanged — nothing here accepts 1.2 or 1.3.
+
+**Strongest surviving objection:** the richer self-contained evidence row
+(decision 6) duplicates identifying evidence into the permanent export
+ledger, raising the minimization stakes; accepted deliberately, with
+decision 12 (retention classes + future compaction covering BOTH
+artifacts) as the mitigation the owner chose.
+
+## 2026-07-16 — At-rest cipher constraints RATIFIED (enumerated); DG-2 CONFIRMED: bounded pure-Rust envelope (B4) + staging closure (B4b) (owner acts)
+
+**Trigger:** owner acts at the 2026-07-16 sitting, resolving (a) the
+ratification-scope ambiguity in the gitignored threat-model working doc
+(its §7 header claimed "ratified §3–§5" while its §8 recorded only §4–§5 —
+the enumerated ratification below replaces the section-label shorthand;
+the tracked correction lives in `docs/THREAT-MODEL-1.2.md` §4), and (b)
+Decision Gate DG-2.
+
+**Ratified constraints (enumerated, mechanism-agnostic):** authenticated
+encryption; fail-closed on missing key or corruption; no unwrapped key
+material at rest (salt + KDF params only); no escrow, no master key, no
+support recovery path — key loss destroys access by design; rotation is an
+explicit audited event; a production cipher refuses `UNENCRYPTED-DEV`
+artifacts; **multi-operator key wrapping remains explicitly OPEN.**
+Tracked home: `docs/THREAT-MODEL-1.2.md` §3.
+
+**DG-2 CONFIRMED (resolves the gate):** the B1 spike's recommendation is
+adopted at its honest scope — a pure-Rust XChaCha20-Poly1305 + Argon2id
+whole-file envelope for the **two bounded T3 metadata artifacts only**
+(export ledger + consent store): passphrase-primary (keyfile as a
+documented advanced mode, never stored beside artifacts); per-artifact
+locks, serialized writers, synchronous reseal; versioned
+AEAD-authenticated header carrying monotonic sequence + previous-envelope
+hash (anti-rollback); export linearization per
+`docs/CEREMONY-DESIGN.md` §10. The RustCrypto dependencies
+(`chacha20poly1305`, `argon2`, `zeroize`) enter `Cargo.toml` at B4 — not
+before.
+
+**B4b (named now, designed at activation):** closure of the recorded
+plaintext T3 staging paths (`ingest()`/`package()`) is an explicit Phase
+1.2 item and a **condition precedent to B6/B8** — deferring it past the
+combined acceptance would falsify the ratified "no plaintext T3 at rest"
+property. The large-artifact backend is decided at B4b (the
+page-level/VFS question may re-open there, bounded to that case).
+
+**Strongest surviving objection:** two storage paths (envelope for small
+stores, a different backend for large staging) is more surface than one
+uniform design; accepted because a whole-file envelope at vault-GPKG scale
+has unacceptable memory/crash profiles, and one uniform page-level backend
+would re-import the C-dependency question the pure-Rust posture rejected.
+
+## 2026-07-16 — DG-3 DEFERRED to MB2.1 activation (owner act)
+
+**Trigger:** owner act at the 2026-07-16 sitting on Decision Gate DG-3
+(Whitebox Next Gen licensing posture).
+
+**Decision:** DEFER until the `geobase-sim` backlog item (MB2.1)
+activates. DG-3 blocks only that scaffolding — nothing on the 1.0 critical
+path — so deciding now buys no schedule benefit and risks a stale pin. The
+2026-07-16 S1 spike stands as **evidence, not a decision**. At activation:
+choose a fresh pinned revision, re-run the license/file inventory against
+it, then either adopt Next Gen (crate-level MIT/Apache grant) or take the
+pre-approved legacy-MIT fallback, which remains one decision away with no
+new vetting round.

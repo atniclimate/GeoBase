@@ -123,7 +123,8 @@ optional native Rust/`wgpu` render path for data too heavy for the browser.
 > CesiumJS escalation path) was scanned in now-**superseded** working docs
 > (`docs/GEOBASE-BUILD-DIRECTIVE.md`, `docs/GEOBASE-DIGITAL-TWIN-FEATURES.md`
 > — see their in-file status banners and `docs/DECISIONS.md` 2026-07-11).
-> Under DG-1's default (`docs/RELEASE-DEFINITION.md`, DRAFT), that scope is
+> Under the ratified 1.0 line (`docs/RELEASE-DEFINITION.md`, RATIFIED
+> 2026-07-16), that scope is
 > **non-gating 1.x backlog only** and is not adopted here; this phase's
 > wording stays "optional native Rust/`wgpu`" and stays consistent with
 > `docs/ARCHITECTURE.md`'s rendering decision (a heavy-render path is "a

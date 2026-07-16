@@ -1,16 +1,13 @@
 # GeoBase — Release Definition (DG-1)
 
-> **STATUS: DRAFT — PENDING PATRICK RATIFICATION.** This document encodes the
-> stated *default* answer to Decision Gate DG-1 (`PLAN_1.0.md` § Decision
-> Gates) as drafted by Claude Code per `PLAN_1.0.md` P0.1. Committing this file
-> is the mechanism `PLAN_1.0.md` names for making a DG-1 answer *tracked*
-> (never an untracked note) — but drafting and committing is not the same act
-> as the owner ratifying it. **This draft does not resolve DG-1.** Nothing in
-> `docs/ROADMAP.md`, `PLAN_1.0.md`, or any other tracked doc may cite this file
-> as a ratified decision until Patrick records ratification (see "Ratification
-> record" below) — either by accepting this draft as-is or by overriding it,
-> in either case via a dated `docs/DECISIONS.md` entry plus this file's status
-> line flipped from DRAFT to RATIFIED.
+> **STATUS: RATIFIED 2026-07-16 by Patrick Freeland.** The owner accepted
+> this document as written (no override, no amendment) at the 2026-07-16
+> sitting — see the "Ratification record" below and the matching dated
+> entry in `docs/DECISIONS.md`. DG-1 is resolved: this file is now the
+> single authoritative home for the 1.0 line, per the source-of-truth
+> hierarchy it defines. Ratifying the line does **not** accept any phase:
+> Phases 1.2/1.3 remain not-accepted until the single combined acceptance
+> at B8, per the acceptance-integrity rule below.
 
 ## Purpose
 
@@ -126,11 +123,10 @@ session that finds the drift (`CONTRIBUTING.md`'s congruence-grep procedure).
 
 ## Ratification record
 
-*(Owner-authored or owner-approved entries only. Empty until Patrick acts.)*
+*(Owner-authored or owner-approved entries only.)*
 
-- **Status:** DRAFT, drafted 2026-07-11 by Claude Code per `PLAN_1.0.md` P0.1.
-  Not yet ratified. To ratify: Patrick either (a) accepts this draft as
-  written — flip this line to `RATIFIED 2026-0X-0X by Patrick Freeland`, add
-  a matching `docs/DECISIONS.md` entry, and update the DG-1 row in
-  `PLAN_1.0.md` to resolved — or (b) records an override default and its
-  rationale here and in `docs/DECISIONS.md`.
+- **Status: RATIFIED 2026-07-16 by Patrick Freeland** — the draft accepted
+  as written (option (a)), at the owner sitting of the same date. Matching
+  dated entry in `docs/DECISIONS.md`; the DG-1 row in `PLAN_1.0.md` updated
+  to resolved in the same commit. Drafted 2026-07-11 by Claude Code per
+  `PLAN_1.0.md` P0.1.

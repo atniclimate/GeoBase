@@ -1,5 +1,17 @@
 # Sovereign Ceremony — Design Proposal (DRAFT for Patrick, B2)
 
+> **SUPERSEDED 2026-07-16 by `docs/CEREMONY-DESIGN.md`** — the owner
+> answered this proposal's decision table at the 2026-07-16 B2 sitting
+> (`docs/DECISIONS.md` same date); the ratified design of record is the
+> authoritative successor. This file is retained as decision-support
+> history only. Notable deltas the sitting made against this proposal's
+> leans: the D1(a) per-app-identity lean was rejected (typed
+> `ExportIdentity`, LocalOperator-only issuable in 1.0); matching uses
+> explicit lineage heads, not inferred precedence; the conditions vec is
+> abolished for a typed struct; store failure is infrastructure failure
+> (503), not `Declined`; and the source set is node-witnessed via export
+> sessions, never requester-declared.
+
 > **STATUS: DRAFT PROPOSAL / DECISION-SUPPORT ONLY. Not a design of record,
 > not a decision.** The sovereign ceremony *mechanism* is deliberately
 > reserved to the owner (`docs/CEREMONY-GATE.md`: "The ceremony mechanism —

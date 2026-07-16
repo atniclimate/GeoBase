@@ -75,9 +75,9 @@ pnpm --filter @geobase/engine-light dev
 `docs/ROADMAP.md` is the single source of truth for phase-acceptance status —
 see it for what is accepted-complete versus in progress. This section is
 deliberately not a restated snapshot (a prior version drifted stale here); for
-the release-scope question ("what ships in 1.0"), see the DRAFT
-[`docs/RELEASE-DEFINITION.md`](docs/RELEASE-DEFINITION.md), pending owner
-ratification.
+the release-scope question ("what ships in 1.0"), see
+[`docs/RELEASE-DEFINITION.md`](docs/RELEASE-DEFINITION.md) (RATIFIED
+2026-07-16).
 
 ## Licensing
 

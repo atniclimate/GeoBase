@@ -4,8 +4,11 @@ Phase 1.3 ships the **seam**: `geobase_gpkg::ceremony::CeremonyGate`, the
 trait every export authorization passes through, plus `ProvisionalDevGate`,
 the only implementation until Phase 1.2. This note lists exactly what 1.2
 must implement against the trait. The ceremony *mechanism* — the sovereign
-process itself — is deliberately not designed here; that is 1.2's work and
-authority.
+process itself — is deliberately not designed here; that was 1.2's work and
+authority, and **it is now done**: the owner-ratified mechanism is
+`docs/CEREMONY-DESIGN.md` (2026-07-16), which B3–B5 implement. Where this
+handoff note and that design differ, the design of record wins (clauses 2
+and 5 below are amended by it).
 
 ## The seam as shipped (Phase 1.3)
 
@@ -21,9 +24,14 @@ pub trait CeremonyGate {
   stamped), requester, optional purpose.
 - `CeremonyRecord` carries: process name, basis, authorized_by, conditions.
   The export pipeline writes `record.audit_details(&auth)` as the
-  `export.ceremony` audit row **in the same transaction discipline as the
-  export itself**; the RStep gate (1.3d) asserts the row exists, so no
-  export path can skip the seam and still pass CI.
+  `export.ceremony` audit row. **Honest current-state note (2026-07-16):
+  today the `export.ceremony` and `export.t2` rows are two separate
+  appends made after the product files are already on disk — a crash
+  between them can tear the pair (a recorded defect, not a feature). The
+  recoverable publication protocol that fixes this is specified in
+  `docs/CEREMONY-DESIGN.md` §6 and lands at B3.** The RStep gate (1.3d)
+  asserts the row exists, so no export path can skip the seam and still
+  pass CI.
 - `ProvisionalDevGate` authorizes T0–T2 with the basis **verbatim**:
   `"provisional — no sovereign ceremony process ran (Phase 1.2 pending)"`
   (`ceremony::PROVISIONAL_BASIS`), and **refuses T3 unconditionally** —
@@ -42,10 +50,14 @@ happens there, nowhere else). It must:
    process; `authorized_by` names the real authority, never the requester
    echo.
 2. **Authenticate the requester.** The seam currently passes an actor
-   string. 1.2 decides the identity mechanism (per-app tokens were already
-   flagged in the 1.0 loopback decision, docs/DECISIONS.md) and extends
-   `ExportAuthorization` with whatever identity evidence it needs — new
-   fields are non-breaking; the struct is the extension point.
+   string. **Amended 2026-07-16 (`docs/CEREMONY-DESIGN.md` §2.4, §7):** the
+   owner decided the free-text `requester` is **REPLACED by typed identity
+   at B3 — one deliberate, recorded breaking seam change**, not a
+   non-breaking addition as this clause originally promised (a deprecated
+   free-text identity field would be a shadow path the ratified "no free
+   text" rule exists to kill). Identity is `ExportIdentity`
+   (LocalOperator-only issuable in 1.0); the session id is the one
+   genuinely non-breaking addition.
 3. **Keep the tier floor.** T3 must remain refused *by construction* —
    keep returning `ExportRefused::TierNeverExports` for T3 source or
    product regardless of any consent recorded. This is an invariant, not a
@@ -54,9 +66,12 @@ happens there, nowhere else). It must:
    the dev gate alone. The 1.3d gate treats its presence as "no sovereign
    process ran"; a sovereign gate emitting it would mislabel real consent.
 5. **Record conditions.** If the ceremony attaches conditions (expiry,
-   geography, purpose limits), they go in `CeremonyRecord::conditions`
-   so they travel with the audit trail. Enforcement of conditions at
-   export time is 1.2 scope.
+   geography, purpose limits), they travel with the audit trail.
+   **Amended 2026-07-16 (`docs/CEREMONY-DESIGN.md` §2.5):** the free-text
+   `CeremonyRecord::conditions` vec this clause originally named is
+   **abolished at B3**, replaced by a typed `Conditions` struct; expiry is
+   enforced fail-closed in 1.0, geography/purpose are
+   recorded-but-advisory.
 6. **Handle refusal as a first-class outcome.** `ExportRefused::Declined`
    with a reason the requester can read; the pipeline writes the refusal
    audit row and returns 403 — no partial exports, no silent drops.
@@ -68,8 +83,9 @@ happens there, nowhere else). It must:
 ## Where the seam is consumed (as of 1.3)
 
 - `export_product()` (1.3b) calls the gate before writing anything; the
-  ceremony record and the `export.t2` row land in the audit trail
-  together.
+  ceremony record and the `export.t2` row both land in the audit trail
+  (as two separate appends today — see the current-state note above; the
+  B3 publication protocol makes them one prepared transaction).
 - `POST /api/export` (engine-desktop) constructs `ExportAuthorization`
   from the request + catalog tier and passes the node's configured gate.
 - The RStep gate (1.3d) asserts: export succeeded ⇒ trail contains

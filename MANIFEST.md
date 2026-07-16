@@ -4,7 +4,8 @@
 > commits; tracked 2026-07-11 per `PLAN_1.0.md` P0.2).** This document is a
 > snapshot, not a live status source: for phase-acceptance status,
 > `docs/ROADMAP.md` is authoritative and this file is subordinate to it (and
-> to the source-of-truth hierarchy in `docs/RELEASE-DEFINITION.md`, DRAFT).
+> to the source-of-truth hierarchy in `docs/RELEASE-DEFINITION.md`, RATIFIED
+> 2026-07-16).
 > The "Proposed Reorganization" section below is a **proposal only — nothing
 > has been moved**; its execution is Decision Gate DG-5, recorded as
 > **deferred post-1.0** (`docs/DECISIONS.md` 2026-07-11). When repo layout or
