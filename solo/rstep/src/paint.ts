@@ -64,7 +64,14 @@ export class HandRolledPaintTool implements PaintTool {
       this.addSourcesAndLayers();
     } else {
       this.map.once("load", () => {
-        if (!this.disposed) this.addSourcesAndLayers();
+        if (this.disposed) return;
+        this.addSourcesAndLayers();
+        // Replay any state created before the style finished loading — the
+        // panel is interactive before map readiness, so painted features /
+        // an in-progress draft could exist. Without this replay they would
+        // be invisible on the map yet still exportable (review H2).
+        this.syncPaint();
+        this.syncDraft();
       });
     }
     this.map.on("click", this.onMapClick);

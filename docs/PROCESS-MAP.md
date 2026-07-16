@@ -144,15 +144,20 @@ The chain, every step observable:
 
 **RStep row (updated 2026-07-16, Phase A A3–A7): harness built —
 acceptance deferred to the sovereignty-core gate (M5/B8).** The 1.3d
-harness now exists and runs green locally + in CI (informational), but
-**against `ProvisionalDevGate`**, asserting the provisional basis
-verbatim. Per the acceptance-integrity rule (`docs/RELEASE-DEFINITION.md`,
-`CONTRIBUTING.md`), this green is engineering evidence, **not** Phase 1.3
-acceptance — `docs/ROADMAP.md` 1.3 stays not-accepted. Acceptance happens
-exactly once, at Phase B's exit (B8), against the sovereign gate, when the
-harness's `EXPECT_BASIS` flips to the sovereign process name. The ledger is
-read only through the trusted Rust verifier (`examples/verify-export-audit.rs`)
-so Phase B at-rest encryption of the T3 ledger does not break the gate.
+harness now exists and runs **green locally**; the `rstep-gate` CI job is
+committed and INFORMATIONAL (first `main` run pending — nothing was pushed
+in the overnight build). It runs **against `ProvisionalDevGate`**, asserting
+the provisional basis verbatim. Per the acceptance-integrity rule
+(`docs/RELEASE-DEFINITION.md`, `CONTRIBUTING.md`), this green is engineering
+evidence, **not** Phase 1.3 acceptance — `docs/ROADMAP.md` 1.3 stays
+not-accepted. Acceptance happens exactly once, at Phase B's exit (B8),
+against the sovereign gate, when the harness's `EXPECT_BASIS` flips to the
+sovereign process name. The ledger is read only through the trusted,
+assertion-only Rust verifier (`examples/verify-export-audit.rs`) which emits
+no row contents; that verifier is the right *place* for Phase B's at-rest
+decryption to live (a node opens its own T3 ledger), but it does **not**
+decrypt anything today — an encrypted ledger will require a cipher/key there
+(Phase B, DG-2).
 
 Fixtures: `scripts/make_geopack_fixtures.py` → committed synthetic sets
 in `data/fixtures/geopack/` (dem+parcels for 0.3; landcover+flood

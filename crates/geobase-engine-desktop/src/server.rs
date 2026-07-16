@@ -425,7 +425,11 @@ struct ExportBodyFeature {
 async fn api_export(
     State(state): State<ServerState>,
     headers: HeaderMap,
-    body: axum::extract::Json<Value>,
+    // Raw bytes, NOT `Json<Value>` (review H1): the JSON extractor would run
+    // before this handler and reject a malformed body with 400 *before* the
+    // token guard. Taking the body as bytes lets the guard authenticate
+    // first; parsing happens only after a valid token.
+    body: axum::body::Bytes,
 ) -> Response {
     use crate::export::{export_product, ExportError, ExportRequest, PaintedFeature, SourcePack};
 
@@ -436,17 +440,63 @@ async fn api_export(
             None,
         );
     };
-    // Interim operator guard (A1): exports enabled without a configured
-    // token is a misconfiguration — fail closed before reading anything.
-    let Some(expected_token) = state.export_token.clone() else {
+    // Interim operator guard (A1): exports enabled without a NON-EMPTY
+    // configured token is a misconfiguration — fail closed before reading
+    // anything. An empty/whitespace token is treated as unconfigured so a
+    // `Some("")` config can never authorize an empty header (the invariant
+    // is enforced HERE, at the public server boundary, not only in binaries).
+    let Some(expected_token) = state
+        .export_token
+        .clone()
+        .filter(|token| !token.trim().is_empty())
+    else {
         return status_json(
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({"reason": "exports are enabled but no export token is configured \
-                              (interim operator guard, Phase A — set one at boot)"}),
+            json!({"reason": "exports are enabled but no non-empty export token is \
+                              configured (interim operator guard, Phase A — set one at boot)"}),
             None,
         );
     };
-    let parsed: ExportBody = match serde_json::from_value(body.0) {
+    // Authenticate BEFORE parsing the body (A1 + review H1): a missing/wrong
+    // token is refused before any request-controlled content is read, so an
+    // unauthenticated caller cannot reach body parsing and cannot write
+    // attacker-controlled identity into the audit trail. The refusal row is
+    // therefore deliberately GENERIC — it records that an unauthenticated
+    // attempt happened, never a claimed product/requester it cannot trust.
+    let provided = headers
+        .get(EXPORT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if !provided.is_some_and(|candidate| token_matches(&expected_token, candidate)) {
+        return match crate::export::record_unauthenticated_refusal(
+            state.at_rest.as_ref(),
+            &exports_dir,
+        ) {
+            // Refusal recorded (or the tier did not require a cipher): 403.
+            Ok(()) => status_json(
+                StatusCode::FORBIDDEN,
+                json!({"reason": "export refused: missing or invalid export token \
+                                  (interim operator guard — Phase A, replaced by \
+                                  requester authentication in Phase B)"}),
+                None,
+            ),
+            // Fail-closed: the node cannot even record the refusal safely
+            // (no cipher for the T3 ledger). Say so honestly — do not claim
+            // the 403+audit contract was met when it was not.
+            Err(ExportError::Encryption(_)) => status_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"reason": "export refused (invalid token) AND the node cannot \
+                                  record the refusal: T3 ledger has no configured \
+                                  at-rest cipher (fail-closed)"}),
+                None,
+            ),
+            Err(err) => status_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"reason": format!("export refusal could not be audited: {err}")}),
+                None,
+            ),
+        };
+    }
+    let parsed: ExportBody = match serde_json::from_slice(&body) {
         Ok(parsed) => parsed,
         Err(err) => {
             return status_json(
@@ -456,40 +506,6 @@ async fn api_export(
             );
         }
     };
-    // Token check BEFORE the ceremony seam (A1): the body is parsed first
-    // only so the refusal audit row can name the product and requester.
-    let provided = headers
-        .get(EXPORT_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok());
-    if !provided.is_some_and(|candidate| token_matches(&expected_token, candidate)) {
-        // Audit the refusal. On a fail-closed node the ledger itself refuses
-        // to be written — but such a node cannot export anything either, so
-        // the 403 stands and only the Encryption refusal is tolerated here.
-        let recorded = crate::export::record_token_refusal(
-            state.at_rest.as_ref(),
-            &exports_dir,
-            &parsed.product,
-            &parsed.requester,
-            &parsed.source_packs,
-            parsed.purpose.as_deref(),
-        );
-        if let Err(err) = recorded {
-            if !matches!(err, ExportError::Encryption(_)) {
-                return status_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({"reason": format!("export refusal could not be audited: {err}")}),
-                    None,
-                );
-            }
-        }
-        return status_json(
-            StatusCode::FORBIDDEN,
-            json!({"reason": "export refused: missing or invalid export token \
-                              (interim operator guard — Phase A, replaced by \
-                              requester authentication in Phase B)"}),
-            None,
-        );
-    }
 
     // Resolve every source pack from the catalog BEFORE anything else.
     let mut sources = Vec::with_capacity(parsed.source_packs.len());
@@ -1770,7 +1786,7 @@ mod tests {
             body["reason"]
                 .as_str()
                 .unwrap()
-                .contains("no export token is configured"),
+                .contains("no non-empty export token is configured"),
             "reason names the misconfiguration: {body}"
         );
         assert!(
@@ -1780,11 +1796,11 @@ mod tests {
         );
     }
 
-    /// [A1] A missing token is refused 403 BEFORE the ceremony seam, with an
-    /// `export.refused` audit row naming product + requester, and no product
-    /// artifact of any kind on disk.
+    /// [A1] A missing token is refused 403 BEFORE the ceremony seam, with a
+    /// GENERIC `export.refused` audit row (no attacker-controlled identity),
+    /// and no product artifact of any kind on disk.
     #[tokio::test]
-    async fn export_without_token_refused_with_audit_row() {
+    async fn export_without_token_refused_with_generic_audit_row() {
         let (app, exports, id) = export_guard_fixture("a1-missing", Some("secret-token"));
         let response = app
             .oneshot(
@@ -1805,8 +1821,13 @@ mod tests {
         let trail = ledger.audit_trail().unwrap();
         assert_eq!(trail.len(), 1, "exactly the refusal row");
         assert_eq!(trail[0].action, "export.refused");
-        assert_eq!(trail[0].dataset_id, "guard-check");
-        assert_eq!(trail[0].actor, "guard-test");
+        // The row must NOT echo the request's claimed product/requester
+        // (review H1): those are attacker-controlled and were never trusted.
+        assert_eq!(trail[0].dataset_id, "(unauthenticated export attempt)");
+        assert_ne!(
+            trail[0].actor, "guard-test",
+            "claimed requester must not be trusted"
+        );
         assert!(
             trail[0].details["reason"]
                 .as_str()
@@ -1837,6 +1858,55 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// [A1 / review B3] An empty configured token is treated as UNCONFIGURED
+    /// at the server boundary — an empty header can never authorize. Fails
+    /// closed (503), even though the request supplies a matching empty token.
+    #[tokio::test]
+    async fn empty_configured_token_fail_closes_and_empty_header_never_authorizes() {
+        let (app, exports, id) = export_guard_fixture("a1-empty", Some("   "));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    // An attacker supplying the "matching" empty token.
+                    .header(EXPORT_TOKEN_HEADER, "")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_response(response).await;
+        assert!(
+            body["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no non-empty export token"),
+            "an empty configured token is a misconfiguration, not an authorizer: {body}"
+        );
+        // Nothing was exported and no refusal row was written (the route
+        // never reached the guard — it fail-closed on misconfiguration).
+        assert!(!exports.join(format!("{id}.shp")).exists());
+    }
+
+    /// [A1 / review H1] Malformed JSON WITHOUT a token is refused by the guard
+    /// (403), never reaching the body parser — authentication precedes parsing.
+    #[tokio::test]
+    async fn malformed_body_without_token_is_refused_by_the_guard() {
+        let (app, _exports, _id) = export_guard_fixture("a1-malformed", Some("secret-token"));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{ this is not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 403 (guard), not 400 (parser): the token is checked first.
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 

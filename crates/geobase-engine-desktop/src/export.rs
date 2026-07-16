@@ -162,33 +162,32 @@ pub enum ExportError {
     Io(#[from] std::io::Error),
 }
 
-/// Append an `export.refused` audit row for a request that failed the
-/// interim operator token guard (Phase A, A1) — refused BEFORE the
-/// ceremony seam ran, so no ceremony record exists and none is implied.
-/// Same ledger, same fail-closed posture as every other T3 write: a node
-/// with no configured cipher refuses to write this row (the caller
-/// tolerates exactly that refusal — such a node cannot export at all).
-pub fn record_token_refusal(
+/// Append a GENERIC `export.refused` audit row for a request that failed the
+/// interim operator token guard (Phase A, A1) — refused BEFORE the request
+/// body was parsed, so there is no trusted product/requester to record and
+/// none is invented (review H1: an unauthenticated caller must not be able
+/// to forge audit attribution). The row records only that an unauthenticated
+/// export attempt was refused, and that the ceremony seam was never
+/// consulted. Same fail-closed posture as every other T3 write: a node with
+/// no configured cipher returns `ExportError::Encryption`, which the caller
+/// surfaces honestly as a fail-closed status rather than a false 403+audit.
+pub fn record_unauthenticated_refusal(
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
-    product: &str,
-    requester: &str,
-    source_packs: &[String],
-    purpose: Option<&str>,
 ) -> Result<(), ExportError> {
     let (tsdf_version, tsdf_origin) = tsdf_info()?;
     let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
     ledger.append_audit(&geobase_gpkg::AuditEntry {
-        dataset_id: product.to_string(),
+        dataset_id: "(unauthenticated export attempt)".into(),
         action: "export.refused".into(),
-        actor: requester.to_string(),
+        actor: "(unverified — no valid export token)".into(),
         tsdf_version,
         tsdf_source_origin: tsdf_origin,
         details: serde_json::json!({
             "reason": "missing or invalid export token (interim operator \
-                       guard — Phase A A1; the ceremony seam was never consulted)",
-            "source_packs": source_packs,
-            "purpose": purpose,
+                       guard — Phase A A1; refused before the request body was \
+                       read, so no product/requester is attributed; the ceremony \
+                       seam was never consulted)",
         }),
     })?;
     Ok(())
