@@ -382,3 +382,71 @@ the dependency and the code could read as deciding DG-2 by the back door.
 Mitigated by leaving the deps unadded and DG-2 explicitly owner-open: this is
 decision *support*, the artifact B4 consumes once Patrick confirms — no
 `chacha20poly1305`/`argon2` entered `Cargo.toml` tonight.
+
+## 2026-07-16 — DG-3 S1 spike: Whitebox Next Gen license inventory (recommendation; DG-3 owner-open)
+
+**Trigger:** `PLAN_1.0.md` MB2.1 / DG-3, the scheduled "stop-and-choose"
+condition-precedent spike before any `geobase-sim` scaffolding. Executed
+overnight per the 2026-07-16 directive. **This records the inventory + a
+recommendation; it does NOT resolve DG-3 (owner: Patrick) and does NOT vendor
+anything or scaffold the crate** — adopting Next Gen commits the product
+dependency graph, an owner act.
+
+**Method:** shallow-cloned `github.com/jblindsay/whitebox_next_gen` (into a
+scratchpad, NOT the repo — external code stays out of the tree per the data
+gate) at HEAD **`a377e25ac6fbe3ef43f598048fa5a32119fb11b5`** (the pin
+candidate) and inventoried the `wbtools_oss` open split.
+
+**Findings (verified):**
+
+1. **All ten F1 tools present in the open split** (`crates/wbtools_oss/src`):
+   BreachDepressionsLeastCost, FillDepressions, D8Pointer, DInf, FD8,
+   Watershed, ExtractStreams, WetnessIndex, ElevationAboveStream,
+   DownslopeDistanceToStream. **All four F2 recipe tools present** too
+   (LidarGroundPointFilter, TINGridding, IDWInterpolation, LidarTile).
+2. **In-memory signatures: yes.** Tools use in-memory `wbraster::Raster`
+   objects through a registry/tool model (`registry.register(Box::new(...))`),
+   satisfying the vetting §3 rule-3 "accepts in-memory raster" condition — the
+   work-file question mostly dissolves for T0/T1.
+3. **Open compute path is free of license gating.** `wbtools_oss` depends only
+   on other open `wb*` crates (`wbcore`, `wbraster`, `wbgeotiff`, `wbvector`,
+   `wbprojection`, `wbtopology`), each `license = "MIT OR Apache-2.0"`. It does
+   **not** depend on `wblicense_core` or `wbtools_pro_shim`. The pro shim IS a
+   license-tier gate (`ctx.capabilities.has_tool_access(meta.id,
+   meta.license_tier)`); `wblicense_core` (no network round-trip, but a
+   license-tier concept) is pulled in only by `wbtools_pro_shim`, `wbw_python`,
+   and `wbw_r` — never by the open compute path. Vendoring `wbtools_oss` + its
+   open deps therefore excludes the pro/license machinery by construction (the
+   directive's CI check "no `wbtools_pro_shim` in the vendored tree" is
+   naturally satisfiable).
+4. **License grant is crate-level only — the one real caveat.** `wbtools_oss`
+   is `license = "MIT OR Apache-2.0"`, `publish = false` (vendoring by pinned
+   rev required, as the directive anticipated). But there is **no top-level
+   LICENSE file** and **0 of 79 `.rs` files in `wbtools_oss` carry an SPDX
+   header**. The grant exists at the crate level (each `Cargo.toml`'s `license`
+   field — a standard, legally-operative SPDX declaration) but **not** at the
+   per-file level. The directive's condition precedent (i) as literally written
+   ("every vendored file carries the MIT/Apache grant") is **met at the crate
+   level, not the file level**.
+
+**Recommendation (owner-open):** the technical preconditions for adopting
+Next Gen are **met** — the ten tools are in the open split, in-memory, gate-free.
+The remaining decision is a licensing-posture judgment reserved to Patrick:
+whether the crate-level MIT/Apache grant suffices, or the stricter per-file
+grant is required. The directive already **pre-approved the legacy-MIT
+WhiteboxTools vendor fallback with "no new vetting round if it trips,"** so
+either path is unblocked:
+- **Adopt Next Gen** → vendor `wbtools_oss` + open deps at rev `a377e25`,
+  exclude `wbtools_pro_shim`/`wblicense_core`, record the crate-level grant +
+  a per-crate license note in `THIRD_PARTY_NOTICES.md`.
+- **Legacy-MIT fallback** → `jblindsay/whitebox-tools` (top-level MIT
+  `LICENSE.txt`), if a per-file/explicit grant is wanted.
+
+DG-3 stays **owner-open**; `geobase-sim` is NOT scaffolded (the plan's
+stop-and-choose bar — do not scaffold before the choice — is honored).
+
+**Strongest surviving objection:** the crate-level-only grant could later be
+challenged by a downstream redistributor wanting per-file provenance;
+mitigated because the legacy-MIT fallback with an explicit top-level license
+is pre-approved and one decision away, and nothing is vendored until Patrick
+chooses.

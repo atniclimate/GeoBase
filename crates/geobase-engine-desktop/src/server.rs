@@ -62,7 +62,11 @@ use crate::Node;
 pub const EXPORT_TOKEN_HEADER: &str = "x-geobase-export-token";
 
 /// Server configuration. `port: 0` binds an ephemeral port (tests).
-#[derive(Debug, Clone, Default)]
+///
+/// `Debug` is hand-written to REDACT `export_token`: the token is a secret
+/// (interim operator credential), and a derived `Debug` would print it into
+/// any diagnostic log that formats the config (review advisory).
+#[derive(Clone, Default)]
 pub struct ServerConfig {
     pub port: u16,
     /// Pre-derived T0 tile pyramid directory (optional until wave 2 wiring).
@@ -81,12 +85,29 @@ pub struct ServerConfig {
     /// requires this operator-held token in the [`EXPORT_TOKEN_HEADER`]
     /// header *before* the ceremony seam runs; a missing or wrong token is
     /// refused 403 with an `export.refused` audit row. Exports enabled with
-    /// **no** token configured fail closed (503 — a misconfiguration, not an
-    /// authorization outcome). Provisional by design: real requester
-    /// authentication (per-app identity, Phase B item B5) replaces this
-    /// guard; it exists to close the unauthenticated-localhost-export dev
-    /// hole documented in `PLAN_1.0.md` § Current Position.
+    /// **no** (or an empty/whitespace) token configured fail closed (503 — a
+    /// misconfiguration, not an authorization outcome). Provisional by
+    /// design: real requester authentication (per-app identity, Phase B item
+    /// B5) replaces this guard; it exists to close the
+    /// unauthenticated-localhost-export dev hole documented in `PLAN_1.0.md`
+    /// § Current Position.
     pub export_token: Option<String>,
+}
+
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("port", &self.port)
+            .field("tiles_dir", &self.tiles_dir)
+            .field("exports_dir", &self.exports_dir)
+            .field("at_rest", &self.at_rest)
+            // Never print the secret — only whether one is set.
+            .field(
+                "export_token",
+                &self.export_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// A running server: bound address plus graceful shutdown.
@@ -1916,6 +1937,63 @@ mod tests {
         assert!(!token_matches("abc123", "abc124"));
         assert!(!token_matches("abc123", "abc12"));
         assert!(!token_matches("abc123", ""));
+    }
+
+    /// [review advisory] An exactly-empty (not just whitespace) configured
+    /// token fail-closes at the boundary too.
+    #[tokio::test]
+    async fn exactly_empty_configured_token_fail_closes() {
+        let (app, _exports, id) = export_guard_fixture("a1-emptystr", Some(""));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// [review advisory] A wrong token on a FAIL-CLOSED node (no cipher) is
+    /// refused with an honest 503 (the node cannot record the refusal
+    /// safely), never a false 403 implying the refusal was audited.
+    #[tokio::test]
+    async fn wrong_token_on_fail_closed_node_returns_503_not_false_403() {
+        // No `at_rest` cipher configured → FailClosedCipher refuses the T3
+        // ledger write, so the refusal cannot be recorded.
+        let entry = create_pack("a1-failclosed-src.gpkg", Some(Tier::T1));
+        let id = entry.id.clone();
+        let exports = temp_path("a1-failclosed-exports");
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                export_token: Some("secret-token".into()),
+                // at_rest: None -> FailClosedCipher by default.
+                ..ServerConfig::default()
+            },
+        );
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "wrong")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_response(response).await;
+        assert!(
+            body["reason"].as_str().unwrap().contains("fail-closed"),
+            "the 503 names the fail-closed cause honestly: {body}"
+        );
+        // No ledger was created — the node could not even record the refusal.
+        assert!(!exports.join("node-audit.gpkg").exists());
     }
 
     #[tokio::test]
