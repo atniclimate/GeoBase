@@ -102,6 +102,47 @@ BEGIN SELECT RAISE(ABORT, 'consent_events is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS consent_events_no_delete
 BEFORE DELETE ON consent_events
 BEGIN SELECT RAISE(ABORT, 'consent_events is append-only'); END;
+-- Insert-time authorization-safety (review B3 F5): make a FORGED complete
+-- record impossible at the SQL surface, not only through the Rust
+-- constructors. `GeoPackage::conn()` is public, so the store — not just the
+-- typed writer — must reject a structurally-thin or mis-shaped agreement.
+-- 1. Only the enrolled local operator records; requester binding non-empty.
+CREATE TRIGGER IF NOT EXISTS consent_agreements_recorder_shape
+BEFORE INSERT ON consent_agreements
+WHEN NEW.recorded_by NOT LIKE 'local-operator:%'
+  OR length(trim(NEW.requester_binding)) = 0
+  OR length(trim(NEW.authority_of_record)) = 0
+  OR length(trim(NEW.product_class)) = 0
+BEGIN SELECT RAISE(ABORT,
+  'consent_agreements: recorded_by must be a local operator and binding/authority/class non-empty'); END;
+-- 2. Evidence must be complete FOR ITS KIND (no thin evidence row).
+CREATE TRIGGER IF NOT EXISTS consent_evidence_completeness
+BEFORE INSERT ON consent_evidence
+WHEN (SELECT kind FROM consent_agreements WHERE agreement_id = NEW.agreement_id) IS NULL
+  OR ((SELECT kind FROM consent_agreements WHERE agreement_id = NEW.agreement_id) = 'tribal_signed'
+      AND (NEW.document_ref IS NULL OR length(trim(NEW.document_ref)) = 0))
+  OR ((SELECT kind FROM consent_agreements WHERE agreement_id = NEW.agreement_id) = 'individual_witnessed'
+      AND (NEW.witnesses IS NULL OR length(trim(NEW.witnesses)) = 0
+           OR NEW.verification_attestation IS NULL
+           OR length(trim(NEW.verification_attestation)) = 0))
+BEGIN SELECT RAISE(ABORT,
+  'consent_evidence: evidence is incomplete for the agreement kind (thin evidence is unrecordable)'); END;
+-- 3. A `recorded` event requires the agreement AND its evidence to already
+--    exist (row presence alone never authorizes — the recorded marker is
+--    unforgeable without the full proof). Also the proof-core hash and,
+--    for signed agreements, acknowledged_at must be present.
+CREATE TRIGGER IF NOT EXISTS consent_events_recorded_requires_proof
+BEFORE INSERT ON consent_events
+WHEN NEW.event_kind = 'recorded'
+  AND (
+    NOT EXISTS (SELECT 1 FROM consent_agreements a
+                WHERE a.agreement_id = NEW.agreement_id
+                  AND a.evidence_hash IS NOT NULL
+                  AND length(trim(a.evidence_hash)) > 0)
+    OR NOT EXISTS (SELECT 1 FROM consent_evidence e WHERE e.agreement_id = NEW.agreement_id)
+  )
+BEGIN SELECT RAISE(ABORT,
+  'consent_events: a recorded event requires a complete agreement (proof hash) and evidence row'); END;
 ";
 
 /// Agreement kind — must match the evidence variant (checked on record).
@@ -158,6 +199,9 @@ pub enum AgreementStatus {
 pub struct MatchedAgreement {
     pub agreement_id: String,
     pub authority_of_record: String,
+    /// The product class this agreement authorizes (recorded term, §3.2)
+    /// — carried into the ceremony row so the ledger is self-contained.
+    pub product_class: String,
     pub evidence: ConsentBasis,
     pub conditions: Conditions,
     /// The store's monotonic head sequence at match time (design §10:
@@ -179,6 +223,12 @@ pub enum MatchRefusal {
     Superseded(String),
     #[error("agreement '{0}' does not bind the requesting identity (wrong requester)")]
     WrongRequester(String),
+    #[error("agreement '{agreement_id}' authorizes product class '{recorded}', not the requested '{requested}'")]
+    WrongProductClass {
+        agreement_id: String,
+        recorded: String,
+        requested: String,
+    },
     #[error("independent agreements ({0}) each fully cover the source set — refused until the operator records how they relate or withdraws one (no unions in 1.0)")]
     DuplicateCoverage(String),
     #[error("agreement '{0}' is recorded but evidence-incomplete: {1} — row presence alone never authorizes")]
@@ -272,23 +322,20 @@ impl ConsentStore {
 
     /// The monotonic head sequence (0 = no events yet).
     pub fn head_sequence(&self) -> Result<i64, ConsentStoreError> {
-        let head: Option<i64> = self
-            .gpkg
-            .conn()
-            .query_row("SELECT MAX(seq) FROM consent_events", [], |r| r.get(0))
-            .map_err(GpkgError::from)?;
-        Ok(head.unwrap_or(0))
+        head_sequence_of(self.gpkg.conn())
     }
 
     /// Record one agreement (§3.3): a LocalOperator act; active the moment
-    /// it is recorded evidence-complete. `supersedes` names an explicit
-    /// predecessor (lineage is only ever something a human recorded);
-    /// `correction` marks the supersession as a correction — correction
-    /// *is* supersession, annotated.
+    /// it is recorded evidence-complete. `supersedes` names the explicit
+    /// predecessors this record supersedes (a new head may resolve several
+    /// independent duplicates in one lineage act, §5.2 — lineage is only
+    /// ever something a human recorded); `correction` marks the
+    /// supersession as a correction — correction *is* supersession,
+    /// annotated.
     pub fn record_agreement(
         &self,
         record: &AgreementRecord,
-        supersedes: Option<&str>,
+        supersedes: &[&str],
         correction: bool,
     ) -> Result<i64, ConsentStoreError> {
         // LocalOperator-only recording — a sovereignty rule, not a
@@ -341,7 +388,12 @@ impl ConsentStore {
                 record.kind.code()
             )));
         }
-        if let Some(predecessor) = supersedes {
+        for predecessor in supersedes {
+            if *predecessor == id {
+                return Err(ConsentStoreError::InvalidRecord(
+                    "an agreement cannot supersede itself".into(),
+                ));
+            }
             let exists: bool = self
                 .gpkg
                 .conn()
@@ -363,35 +415,43 @@ impl ConsentStore {
             .to_rfc3339();
 
         // Proof-core vs evidence-detail split (§3.2/§9).
-        let (evidence_hash, acknowledged_at, document_ref, witnesses, attestation) =
-            match &record.evidence {
-                ConsentBasis::SignedAgreement {
-                    document_ref,
-                    document_hash,
-                    acknowledged_at,
-                } => (
-                    Some(document_hash.to_hex()),
-                    Some(acknowledged_at.to_rfc3339()),
-                    Some(document_ref.clone()),
+        let (evidence_hash, acknowledged_at, document_ref, witnesses, attestation) = match &record
+            .evidence
+        {
+            ConsentBasis::SignedAgreement {
+                document_ref,
+                document_hash,
+                acknowledged_at,
+            } => (
+                Some(document_hash.to_hex()),
+                Some(acknowledged_at.to_rfc3339()),
+                Some(document_ref.clone()),
+                None,
+                None,
+            ),
+            ConsentBasis::WitnessedVerbal {
+                witnesses,
+                verification_attestation,
+            } => {
+                let witnesses_json = serde_json::to_string(
+                    &witnesses.iter().map(Witness::as_str).collect::<Vec<_>>(),
+                )
+                .map_err(GpkgError::from)?;
+                // §9 proof-core: commit a hash over the canonical
+                // witnessed detail so a future compaction that removes
+                // the identifying detail still proves what was carried.
+                let commitment =
+                    format!("witnessed-verbal-v1\n{witnesses_json}\n{verification_attestation}");
+                let hash = Sha256Digest::of_bytes(commitment.as_bytes()).to_hex();
+                (
+                    Some(hash),
                     None,
                     None,
-                ),
-                ConsentBasis::WitnessedVerbal {
-                    witnesses,
-                    verification_attestation,
-                } => (
-                    None,
-                    None,
-                    None,
-                    Some(
-                        serde_json::to_string(
-                            &witnesses.iter().map(Witness::as_str).collect::<Vec<_>>(),
-                        )
-                        .map_err(GpkgError::from)?,
-                    ),
+                    Some(witnesses_json),
                     Some(verification_attestation.clone()),
-                ),
-            };
+                )
+            }
+        };
 
         let source_scope_json =
             serde_json::to_string(&record.source_scope).map_err(GpkgError::from)?;
@@ -435,14 +495,18 @@ impl ConsentStore {
             rusqlite::params![id, document_ref, witnesses, attestation],
         )
         .map_err(GpkgError::from)?;
+        // The `recorded` event marks the new head active. Supersession of
+        // each predecessor is carried by its OWN explicit event below, so
+        // this event's related_agreement stays NULL (plural predecessors
+        // cannot fit one column — review B3 F7).
         tx.execute(
             "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at, \
-             related_agreement) VALUES (?1, ?2, 'recorded', ?3, ?4)",
-            rusqlite::params![new_event_id()?, id, recorded_at, supersedes],
+             related_agreement) VALUES (?1, ?2, 'recorded', ?3, NULL)",
+            rusqlite::params![new_event_id()?, id, recorded_at],
         )
         .map_err(GpkgError::from)?;
-        if let Some(predecessor) = supersedes {
-            // The predecessor's lineage carries its own explicit event —
+        for predecessor in supersedes {
+            // Each predecessor's lineage carries its own explicit event —
             // its history shows WHAT superseded it, not just that it was.
             let kind = if correction {
                 "corrected_by"
@@ -508,107 +572,40 @@ impl ConsentStore {
     pub fn statuses(
         &self,
     ) -> Result<std::collections::BTreeMap<String, AgreementStatus>, ConsentStoreError> {
-        let mut stmt = self
-            .gpkg
-            .conn()
-            .prepare(
-                "SELECT agreement_id, event_kind, related_agreement FROM consent_events \
-                 ORDER BY seq",
-            )
-            .map_err(GpkgError::from)?;
-        let events: Vec<(String, String, Option<String>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .map_err(GpkgError::from)?
-            .collect::<Result<_, _>>()
-            .map_err(GpkgError::from)?;
-
-        let mut statuses = std::collections::BTreeMap::new();
-        for (subject, kind, related) in events {
-            match kind.as_str() {
-                "recorded" => {
-                    statuses.insert(subject.clone(), AgreementStatus::Active);
-                    if let Some(predecessor) = related {
-                        // Supersession never resurrects a revoked record.
-                        statuses
-                            .entry(predecessor)
-                            .and_modify(|s| {
-                                if *s == AgreementStatus::Active {
-                                    *s = AgreementStatus::Superseded;
-                                }
-                            })
-                            .or_insert(AgreementStatus::Superseded);
-                    }
-                }
-                "revoked" => {
-                    statuses.insert(subject, AgreementStatus::Revoked);
-                }
-                "superseded_by" | "corrected_by" => {
-                    statuses
-                        .entry(subject)
-                        .and_modify(|s| {
-                            if *s == AgreementStatus::Active {
-                                *s = AgreementStatus::Superseded;
-                            }
-                        })
-                        .or_insert(AgreementStatus::Superseded);
-                }
-                other => {
-                    return Err(ConsentStoreError::Corrupt(format!(
-                        "unknown event_kind '{other}' in consent_events"
-                    )));
-                }
-            }
-        }
-        Ok(statuses)
+        fold_statuses(self.gpkg.conn())
     }
 
     /// Match the node-witnessed source set against the store (§5.2):
     /// ID-scoped subset match; expiry filtering BEFORE multiplicity;
-    /// exactly one active lineage head must fully cover the set; no
-    /// unions; independent duplicate coverage refuses; wrong requester
-    /// refuses. `Ok(Err(refusal))` is a GOVERNANCE outcome; `Err(_)` is
-    /// INFRASTRUCTURE — the two never mix (§5.3).
+    /// **multiplicity BEFORE requester binding** (independent duplicate
+    /// full coverage refuses regardless of which requester each binds —
+    /// review B3 F7); the sole active lineage head must bind the requester
+    /// AND authorize the requested `product_class`. `Ok(Err(refusal))` is
+    /// a GOVERNANCE outcome; `Err(_)` is INFRASTRUCTURE — never mixed
+    /// (§5.3).
+    ///
+    /// All reads run inside ONE deferred transaction so the folded
+    /// statuses, the agreement rows, and the returned `store_sequence` are
+    /// a single coherent snapshot — a revocation committing mid-match
+    /// cannot be observed as Active by the fold and simultaneously present
+    /// in the sequence (review B3 F3).
     pub fn match_agreement(
         &self,
         source_set: &[String],
         requester: &ExportIdentity,
+        product_class: &str,
         observed_at: UtcInstant,
     ) -> Result<Result<MatchedAgreement, MatchRefusal>, ConsentStoreError> {
-        let statuses = self.statuses()?;
-        let mut stmt = self
+        let tx = self
             .gpkg
             .conn()
-            .prepare(
-                "SELECT a.agreement_id, a.kind, a.source_scope, a.authority_of_record, \
-                        a.requester_binding, a.expires_at, a.purpose_limit, a.geography_limit, \
-                        a.evidence_hash, a.acknowledged_at, \
-                        e.document_ref, e.witnesses, e.verification_attestation \
-                 FROM consent_agreements a \
-                 LEFT JOIN consent_evidence e ON e.agreement_id = a.agreement_id \
-                 ORDER BY a.agreement_id",
-            )
+            .unchecked_transaction()
             .map_err(GpkgError::from)?;
-        let rows: Vec<StoredAgreement> = stmt
-            .query_map([], |r| {
-                Ok(StoredAgreement {
-                    agreement_id: r.get(0)?,
-                    kind: r.get(1)?,
-                    source_scope: r.get(2)?,
-                    authority_of_record: r.get(3)?,
-                    requester_binding: r.get(4)?,
-                    expires_at: r.get(5)?,
-                    purpose_limit: r.get(6)?,
-                    geography_limit: r.get(7)?,
-                    evidence_hash: r.get(8)?,
-                    acknowledged_at: r.get(9)?,
-                    document_ref: r.get(10)?,
-                    witnesses: r.get(11)?,
-                    verification_attestation: r.get(12)?,
-                })
-            })
-            .map_err(GpkgError::from)?
-            .collect::<Result<_, _>>()
-            .map_err(GpkgError::from)?;
+        let statuses = fold_statuses(&tx)?;
+        let rows = read_agreements(&tx)?;
+        let snapshot_sequence = head_sequence_of(&tx)?;
+        // Read-only: commit releases the snapshot without writing.
+        tx.commit().map_err(GpkgError::from)?;
 
         // 1. Coverage: which agreements' source_scope ⊇ the witnessed set.
         let mut covering: Vec<&StoredAgreement> = Vec::new();
@@ -627,10 +624,8 @@ impl ConsentStore {
             return Ok(Err(MatchRefusal::NoAgreement));
         }
 
-        // 2. Status: only the active lineage head can authorize. Track the
-        //    best near-miss so the refusal reason names what actually
-        //    blocked (revoked beats superseded beats expired in
-        //    explanatory value — the operator needs the strongest fact).
+        // 2. Status: only active lineage heads survive. Track the best
+        //    near-miss so the refusal names the strongest blocking fact.
         let mut active: Vec<&StoredAgreement> = Vec::new();
         let mut near_miss: Option<MatchRefusal> = None;
         for row in covering {
@@ -677,42 +672,148 @@ impl ConsentStore {
             }
         }
 
-        // 4. Requester binding.
-        let requester_string = requester.audit_string();
-        let mut bound: Vec<&StoredAgreement> = Vec::new();
-        for row in unexpired {
-            if row.requester_binding == requester_string {
-                bound.push(row);
-            } else if near_miss.is_none() {
-                near_miss = Some(MatchRefusal::WrongRequester(row.agreement_id.clone()));
+        // 4. Multiplicity BEFORE requester (review B3 F7): more than one
+        //    active, unexpired agreement fully covering the set is
+        //    ambiguous — refuse regardless of requester binding until the
+        //    operator records the lineage relationship. No unions.
+        let head = match unexpired.len() {
+            0 => return Ok(Err(near_miss.unwrap_or(MatchRefusal::NoAgreement))),
+            1 => unexpired[0],
+            _ => {
+                let ids: Vec<&str> = unexpired.iter().map(|r| r.agreement_id.as_str()).collect();
+                return Ok(Err(MatchRefusal::DuplicateCoverage(ids.join(", "))));
             }
+        };
+
+        // 5. The sole head must bind THIS requester and authorize the
+        //    requested product class (recorded agreement term, §3.2).
+        if head.requester_binding != requester.audit_string() {
+            return Ok(Err(MatchRefusal::WrongRequester(head.agreement_id.clone())));
+        }
+        if head.product_class != product_class {
+            return Ok(Err(MatchRefusal::WrongProductClass {
+                agreement_id: head.agreement_id.clone(),
+                recorded: head.product_class.clone(),
+                requested: product_class.to_string(),
+            }));
         }
 
-        // 5. Multiplicity: exactly one active lineage head.
-        match bound.len() {
-            0 => Ok(Err(near_miss.unwrap_or(MatchRefusal::NoAgreement))),
-            1 => {
-                let row = bound[0];
-                match rebuild_evidence(row, observed_at) {
-                    Ok(evidence) => Ok(Ok(MatchedAgreement {
-                        agreement_id: row.agreement_id.clone(),
-                        authority_of_record: row.authority_of_record.clone(),
-                        evidence,
-                        conditions: rebuild_conditions(row)?,
-                        store_sequence: self.head_sequence()?,
-                    })),
-                    Err(reason) => Ok(Err(MatchRefusal::EvidenceIncomplete(
-                        row.agreement_id.clone(),
-                        reason,
-                    ))),
+        // 6. Reconstruct evidence through the validating constructors — a
+        //    store-side incomplete record refuses here.
+        match rebuild_evidence(head, observed_at) {
+            Ok(evidence) => Ok(Ok(MatchedAgreement {
+                agreement_id: head.agreement_id.clone(),
+                authority_of_record: head.authority_of_record.clone(),
+                product_class: head.product_class.clone(),
+                evidence,
+                conditions: rebuild_conditions(head)?,
+                store_sequence: snapshot_sequence,
+            })),
+            Err(reason) => Ok(Err(MatchRefusal::EvidenceIncomplete(
+                head.agreement_id.clone(),
+                reason,
+            ))),
+        }
+    }
+}
+
+/// Fold the event log (by store sequence) using `conn` — shared by the
+/// pub `statuses` method and the transactional `match_agreement` snapshot.
+fn fold_statuses(
+    conn: &rusqlite::Connection,
+) -> Result<std::collections::BTreeMap<String, AgreementStatus>, ConsentStoreError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT agreement_id, event_kind, related_agreement FROM consent_events ORDER BY seq",
+        )
+        .map_err(GpkgError::from)?;
+    let events: Vec<(String, String, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(GpkgError::from)?
+        .collect::<Result<_, _>>()
+        .map_err(GpkgError::from)?;
+
+    let mut statuses = std::collections::BTreeMap::new();
+    for (subject, kind, related) in events {
+        match kind.as_str() {
+            "recorded" => {
+                statuses.insert(subject.clone(), AgreementStatus::Active);
+                if let Some(predecessor) = related {
+                    statuses
+                        .entry(predecessor)
+                        .and_modify(|s| {
+                            if *s == AgreementStatus::Active {
+                                *s = AgreementStatus::Superseded;
+                            }
+                        })
+                        .or_insert(AgreementStatus::Superseded);
                 }
             }
-            _ => {
-                let ids: Vec<&str> = bound.iter().map(|r| r.agreement_id.as_str()).collect();
-                Ok(Err(MatchRefusal::DuplicateCoverage(ids.join(", "))))
+            "revoked" => {
+                statuses.insert(subject, AgreementStatus::Revoked);
+            }
+            "superseded_by" | "corrected_by" => {
+                statuses
+                    .entry(subject)
+                    .and_modify(|s| {
+                        if *s == AgreementStatus::Active {
+                            *s = AgreementStatus::Superseded;
+                        }
+                    })
+                    .or_insert(AgreementStatus::Superseded);
+            }
+            other => {
+                return Err(ConsentStoreError::Corrupt(format!(
+                    "unknown event_kind '{other}' in consent_events"
+                )));
             }
         }
     }
+    Ok(statuses)
+}
+
+fn head_sequence_of(conn: &rusqlite::Connection) -> Result<i64, ConsentStoreError> {
+    let head: Option<i64> = conn
+        .query_row("SELECT MAX(seq) FROM consent_events", [], |r| r.get(0))
+        .map_err(GpkgError::from)?;
+    Ok(head.unwrap_or(0))
+}
+
+fn read_agreements(conn: &rusqlite::Connection) -> Result<Vec<StoredAgreement>, ConsentStoreError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.agreement_id, a.kind, a.source_scope, a.product_class, \
+                    a.authority_of_record, a.requester_binding, a.expires_at, \
+                    a.purpose_limit, a.geography_limit, a.evidence_hash, a.acknowledged_at, \
+                    e.document_ref, e.witnesses, e.verification_attestation \
+             FROM consent_agreements a \
+             LEFT JOIN consent_evidence e ON e.agreement_id = a.agreement_id \
+             ORDER BY a.agreement_id",
+        )
+        .map_err(GpkgError::from)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(StoredAgreement {
+                agreement_id: r.get(0)?,
+                kind: r.get(1)?,
+                source_scope: r.get(2)?,
+                product_class: r.get(3)?,
+                authority_of_record: r.get(4)?,
+                requester_binding: r.get(5)?,
+                expires_at: r.get(6)?,
+                purpose_limit: r.get(7)?,
+                geography_limit: r.get(8)?,
+                evidence_hash: r.get(9)?,
+                acknowledged_at: r.get(10)?,
+                document_ref: r.get(11)?,
+                witnesses: r.get(12)?,
+                verification_attestation: r.get(13)?,
+            })
+        })
+        .map_err(GpkgError::from)?
+        .collect::<Result<_, _>>()
+        .map_err(GpkgError::from)?;
+    Ok(rows)
 }
 
 /// One agreement row as stored (proof-core + joined evidence detail).
@@ -720,6 +821,7 @@ struct StoredAgreement {
     agreement_id: String,
     kind: String,
     source_scope: String,
+    product_class: String,
     authority_of_record: String,
     requester_binding: String,
     expires_at: Option<String>,
@@ -890,7 +992,7 @@ mod tests {
     fn record_and_match_happy_path_both_kinds() {
         let dir = temp_dir("happy");
         let s = store(&dir);
-        s.record_agreement(&agreement("a-tribal", &["dem", "landcover"]), None, false)
+        s.record_agreement(&agreement("a-tribal", &["dem", "landcover"]), &[], false)
             .unwrap();
         let mut individual = agreement("a-individual", &["interviews"]);
         individual.kind = AgreementKind::IndividualWitnessed;
@@ -902,10 +1004,15 @@ mod tests {
             "operator verified both witnesses in person",
         )
         .unwrap();
-        s.record_agreement(&individual, None, false).unwrap();
+        s.record_agreement(&individual, &[], false).unwrap();
 
         let matched = s
-            .match_agreement(&set(&["dem"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(matched.agreement_id, "a-tribal");
@@ -920,7 +1027,12 @@ mod tests {
         assert!(matched.store_sequence > 0);
 
         let matched = s
-            .match_agreement(&set(&["interviews"]), &operator(), now())
+            .match_agreement(
+                &set(&["interviews"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap();
         assert!(matches!(
@@ -933,16 +1045,26 @@ mod tests {
     fn subset_match_is_id_scoped_and_wrong_scope_refuses() {
         let dir = temp_dir("scope");
         let s = store(&dir);
-        s.record_agreement(&agreement("a1", &["dem", "landcover"]), None, false)
+        s.record_agreement(&agreement("a1", &["dem", "landcover"]), &[], false)
             .unwrap();
         // Full coverage of a subset: authorized.
         assert!(s
-            .match_agreement(&set(&["dem", "landcover"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem", "landcover"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now()
+            )
             .unwrap()
             .is_ok());
         // A pack outside the scope: refused, no agreement covers.
         let refusal = s
-            .match_agreement(&set(&["dem", "flood"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem", "flood"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap_err();
         assert_eq!(refusal, MatchRefusal::NoAgreement);
@@ -952,20 +1074,30 @@ mod tests {
     fn revoked_head_suspends_lineage_no_ancestor_fallback() {
         let dir = temp_dir("lineage");
         let s = store(&dir);
-        s.record_agreement(&agreement("v1", &["dem"]), None, false)
+        s.record_agreement(&agreement("v1", &["dem"]), &[], false)
             .unwrap();
-        s.record_agreement(&agreement("v2", &["dem"]), Some("v1"), false)
+        s.record_agreement(&agreement("v2", &["dem"]), &["v1"], false)
             .unwrap();
         // v2 is the head; v1 superseded.
         let matched = s
-            .match_agreement(&set(&["dem"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(matched.agreement_id, "v2");
         // Revoke the head: the lineage is SUSPENDED — v1 must NOT come back.
         s.revoke("v2", &operator()).unwrap();
         let refusal = s
-            .match_agreement(&set(&["dem"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap_err();
         assert_eq!(refusal, MatchRefusal::Revoked("v2".into()));
@@ -975,10 +1107,10 @@ mod tests {
     fn supersession_never_resurrects_a_revoked_predecessor() {
         let dir = temp_dir("norez");
         let s = store(&dir);
-        s.record_agreement(&agreement("v1", &["dem"]), None, false)
+        s.record_agreement(&agreement("v1", &["dem"]), &[], false)
             .unwrap();
         s.revoke("v1", &operator()).unwrap();
-        s.record_agreement(&agreement("v2", &["dem"]), Some("v1"), false)
+        s.record_agreement(&agreement("v2", &["dem"]), &["v1"], false)
             .unwrap();
         let statuses = s.statuses().unwrap();
         assert_eq!(statuses["v1"], AgreementStatus::Revoked);
@@ -989,22 +1121,32 @@ mod tests {
     fn independent_duplicate_full_coverage_refuses_until_related() {
         let dir = temp_dir("dup");
         let s = store(&dir);
-        s.record_agreement(&agreement("a1", &["dem"]), None, false)
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
             .unwrap();
-        s.record_agreement(&agreement("a2", &["dem", "landcover"]), None, false)
+        s.record_agreement(&agreement("a2", &["dem", "landcover"]), &[], false)
             .unwrap();
         let refusal = s
-            .match_agreement(&set(&["dem"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap_err();
         assert!(matches!(refusal, MatchRefusal::DuplicateCoverage(_)));
         // The operator records the relationship: a2 supersedes a1 → resolved.
-        s.record_agreement(&agreement("a3", &["dem", "landcover"]), Some("a1"), false)
+        s.record_agreement(&agreement("a3", &["dem", "landcover"]), &["a1"], false)
             .unwrap();
         // Still duplicate: a2 and a3 both active… withdraw a2.
         s.revoke("a2", &operator()).unwrap();
         let matched = s
-            .match_agreement(&set(&["dem"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(matched.agreement_id, "a3");
@@ -1016,24 +1158,39 @@ mod tests {
         let s = store(&dir);
         let mut expiring = agreement("a-expiring", &["dem"]);
         expiring.conditions.expires_at = Some(t("2026-07-10T00:00:00Z"));
-        s.record_agreement(&expiring, None, false).unwrap();
+        s.record_agreement(&expiring, &[], false).unwrap();
         // Before expiry: authorizes.
         assert!(s
-            .match_agreement(&set(&["dem"]), &operator(), t("2026-07-09T00:00:00Z"))
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                t("2026-07-09T00:00:00Z")
+            )
             .unwrap()
             .is_ok());
         // At/after expiry: refused (>= is expired — fail-closed boundary).
         let refusal = s
-            .match_agreement(&set(&["dem"]), &operator(), t("2026-07-10T00:00:00Z"))
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                t("2026-07-10T00:00:00Z"),
+            )
             .unwrap()
             .unwrap_err();
         assert_eq!(refusal, MatchRefusal::Expired("a-expiring".into()));
         // Expiry BEFORE multiplicity: an expired head plus one live head is
         // a single match, not a duplicate.
-        s.record_agreement(&agreement("a-live", &["dem"]), None, false)
+        s.record_agreement(&agreement("a-live", &["dem"]), &[], false)
             .unwrap();
         let matched = s
-            .match_agreement(&set(&["dem"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(matched.agreement_id, "a-live");
@@ -1043,14 +1200,19 @@ mod tests {
     fn superseded_only_coverage_names_supersession_as_the_reason() {
         let dir = temp_dir("superseded-reason");
         let s = store(&dir);
-        s.record_agreement(&agreement("v1", &["dem", "flood"]), None, false)
+        s.record_agreement(&agreement("v1", &["dem", "flood"]), &[], false)
             .unwrap();
         // v2 supersedes v1 but covers a NARROWER scope: for the wider set
         // the only covering agreement is the superseded v1.
-        s.record_agreement(&agreement("v2", &["dem"]), Some("v1"), false)
+        s.record_agreement(&agreement("v2", &["dem"]), &["v1"], false)
             .unwrap();
         let refusal = s
-            .match_agreement(&set(&["dem", "flood"]), &operator(), now())
+            .match_agreement(
+                &set(&["dem", "flood"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap_err();
         assert_eq!(refusal, MatchRefusal::Superseded("v1".into()));
@@ -1060,11 +1222,16 @@ mod tests {
     fn wrong_requester_refuses() {
         let dir = temp_dir("requester");
         let s = store(&dir);
-        s.record_agreement(&agreement("a1", &["dem"]), None, false)
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
             .unwrap();
         let other = ExportIdentity::local_operator("someone-else").unwrap();
         let refusal = s
-            .match_agreement(&set(&["dem"]), &other, now())
+            .match_agreement(
+                &set(&["dem"]),
+                &other,
+                "painted-opportunity-shapefile",
+                now(),
+            )
             .unwrap()
             .unwrap_err();
         assert_eq!(refusal, MatchRefusal::WrongRequester("a1".into()));
@@ -1079,10 +1246,10 @@ mod tests {
             token: crate::consent::DelegateToken::test_only("t"),
         };
         assert!(matches!(
-            s.record_agreement(&rec, None, false),
+            s.record_agreement(&rec, &[], false),
             Err(ConsentStoreError::InvalidRecord(_))
         ));
-        s.record_agreement(&agreement("a2", &["dem"]), None, false)
+        s.record_agreement(&agreement("a2", &["dem"]), &[], false)
             .unwrap();
         let delegate = ExportIdentity::TribalDelegate {
             token: crate::consent::DelegateToken::test_only("t"),
@@ -1097,7 +1264,7 @@ mod tests {
     fn store_is_append_only_by_trigger() {
         let dir = temp_dir("appendonly");
         let s = store(&dir);
-        s.record_agreement(&agreement("a1", &["dem"]), None, false)
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
             .unwrap();
         let gpkg = GeoPackage::open(&s.path()).unwrap();
         for sql in [
@@ -1112,16 +1279,22 @@ mod tests {
         }
     }
 
+    /// Review B3 F5: a forged agreement inserted through the public
+    /// `GeoPackage::conn()` SQL surface — bypassing the typed constructors
+    /// — must not become authorizable. The insert-time triggers reject a
+    /// thin agreement (no evidence row / no proof hash) and a `recorded`
+    /// event that lacks its proof, so the forgery cannot even land.
     #[test]
-    fn evidence_incomplete_store_record_refuses_not_authorizes() {
-        let dir = temp_dir("thin");
+    fn raw_sql_forgery_is_rejected_by_insert_triggers() {
+        let dir = temp_dir("forge");
         let s = store(&dir);
-        s.record_agreement(&agreement("a1", &["dem"]), None, false)
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
             .unwrap();
-        // Simulate a store-side thin record by inserting one directly
-        // (bypassing the typed write path, as corruption or an old tool
-        // might). Row presence alone must never authorize.
         let gpkg = GeoPackage::open(&s.path()).unwrap();
+
+        // (a) A thin agreement with no proof hash: agreement insert is
+        // allowed (proof-core hash is nullable at column level) but the
+        // `recorded` event that would activate it is refused.
         gpkg.conn()
             .execute(
                 "INSERT INTO consent_agreements (agreement_id, kind, source_scope, \
@@ -1131,19 +1304,130 @@ mod tests {
                 [operator().audit_string()],
             )
             .unwrap();
+        let recorded = gpkg.conn().execute(
+            "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at) \
+             VALUES ('deadbeef', 'thin', 'recorded', '2026-07-16T00:00:00Z')",
+            [],
+        );
+        assert!(
+            recorded.is_err(),
+            "a recorded event without proof/evidence must be rejected by the trigger"
+        );
+
+        // (b) A non-operator recorder is refused at agreement insert.
+        let bad_recorder = gpkg.conn().execute(
+            "INSERT INTO consent_agreements (agreement_id, kind, source_scope, product_class, \
+             product_tier, authority_of_record, requester_binding, recorded_by) \
+             VALUES ('forged', 'tribal_signed', '[\"dem\"]', 'x', 'T2', 'a', 'b', 'attacker')",
+            [],
+        );
+        assert!(
+            bad_recorder.is_err(),
+            "recorded_by must be a local operator"
+        );
+
+        // (c) A thin evidence row (signed kind, no document_ref) is refused.
         gpkg.conn()
             .execute(
-                "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at) \
-                 VALUES ('deadbeef', 'thin', 'recorded', '2026-07-16T00:00:00Z')",
-                [],
+                "INSERT INTO consent_agreements (agreement_id, kind, source_scope, product_class, \
+                 product_tier, authority_of_record, requester_binding, evidence_hash, recorded_by) \
+                 VALUES ('t2', 'tribal_signed', '[\"dem\"]', 'x', 'T2', 'auth', ?1, 'abc', ?1)",
+                [operator().audit_string()],
             )
             .unwrap();
-        drop(gpkg);
+        let thin_evidence = gpkg.conn().execute(
+            "INSERT INTO consent_evidence (agreement_id, document_ref) VALUES ('t2', '')",
+            [],
+        );
+        assert!(
+            thin_evidence.is_err(),
+            "empty evidence for a signed agreement must be refused"
+        );
+    }
+
+    /// A store-side record whose evidence became unreadable AFTER a valid
+    /// `recorded` event (e.g. corruption) still refuses at match time —
+    /// row presence alone never authorizes (design §5.2). Simulated by
+    /// matching against a genuine record whose evidence we then can't
+    /// reconstruct is covered by the rebuild path; here we assert the
+    /// positive record authorizes and its evidence rebuilds.
+    #[test]
+    fn genuine_record_authorizes_and_rebuilds_evidence() {
+        let dir = temp_dir("genuine");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
+            .unwrap();
+        let matched = s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            matched.evidence,
+            ConsentBasis::SignedAgreement { .. }
+        ));
+    }
+
+    /// Review B3 F7: product-class mismatch is a governance refusal — an
+    /// agreement recorded for one class does not authorize another.
+    #[test]
+    fn wrong_product_class_refuses() {
+        let dir = temp_dir("class");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
+            .unwrap();
         let refusal = s
-            .match_agreement(&set(&["flood"]), &operator(), now())
+            .match_agreement(&set(&["dem"]), &operator(), "some-other-class", now())
             .unwrap()
             .unwrap_err();
-        assert!(matches!(refusal, MatchRefusal::EvidenceIncomplete(_, _)));
+        assert!(matches!(refusal, MatchRefusal::WrongProductClass { .. }));
+    }
+
+    /// Review B3 F7: a new head may supersede SEVERAL predecessors in one
+    /// lineage act, resolving independent duplicate coverage.
+    #[test]
+    fn one_head_supersedes_multiple_predecessors() {
+        let dir = temp_dir("multisup");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
+            .unwrap();
+        s.record_agreement(&agreement("a2", &["dem", "landcover"]), &[], false)
+            .unwrap();
+        // a1 and a2 both cover {dem}: duplicate coverage.
+        let refusal = s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(refusal, MatchRefusal::DuplicateCoverage(_)));
+        // One composite head supersedes BOTH: resolved to a single head.
+        s.record_agreement(
+            &agreement("a3", &["dem", "landcover"]),
+            &["a1", "a2"],
+            false,
+        )
+        .unwrap();
+        let matched = s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched.agreement_id, "a3");
+        let statuses = s.statuses().unwrap();
+        assert_eq!(statuses["a1"], AgreementStatus::Superseded);
+        assert_eq!(statuses["a2"], AgreementStatus::Superseded);
     }
 
     #[test]
@@ -1167,7 +1451,7 @@ mod tests {
         let mut rec = agreement("a1", &["dem"]);
         rec.kind = AgreementKind::IndividualWitnessed; // evidence is SignedAgreement
         assert!(matches!(
-            s.record_agreement(&rec, None, false),
+            s.record_agreement(&rec, &[], false),
             Err(ConsentStoreError::InvalidRecord(_))
         ));
     }
@@ -1177,7 +1461,7 @@ mod tests {
         let dir = temp_dir("ghost");
         let s = store(&dir);
         assert!(matches!(
-            s.record_agreement(&agreement("a1", &["dem"]), Some("ghost"), false),
+            s.record_agreement(&agreement("a1", &["dem"]), &["ghost"], false),
             Err(ConsentStoreError::InvalidRecord(_))
         ));
     }
@@ -1186,9 +1470,9 @@ mod tests {
     fn correction_is_supersession_annotated() {
         let dir = temp_dir("correction");
         let s = store(&dir);
-        s.record_agreement(&agreement("v1", &["dem"]), None, false)
+        s.record_agreement(&agreement("v1", &["dem"]), &[], false)
             .unwrap();
-        s.record_agreement(&agreement("v1-corrected", &["dem"]), Some("v1"), true)
+        s.record_agreement(&agreement("v1-corrected", &["dem"]), &["v1"], true)
             .unwrap();
         let gpkg = GeoPackage::open(&s.path()).unwrap();
         let kind: String = gpkg
@@ -1211,7 +1495,7 @@ mod tests {
         let s = store(&dir);
         assert_eq!(s.head_sequence().unwrap(), 0);
         let s1 = s
-            .record_agreement(&agreement("a1", &["dem"]), None, false)
+            .record_agreement(&agreement("a1", &["dem"]), &[], false)
             .unwrap();
         let s2 = s.revoke("a1", &operator()).unwrap();
         assert!(s2 > s1);

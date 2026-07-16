@@ -84,7 +84,11 @@ fn main() {
         Ok(evidence) => evidence,
         Err(err) => fail(&err.to_string()),
     };
-    let expires_at = match expires.as_deref().map(UtcInstant::parse_rfc3339).transpose() {
+    let expires_at = match expires
+        .as_deref()
+        .map(UtcInstant::parse_rfc3339)
+        .transpose()
+    {
         Ok(expires_at) => expires_at,
         Err(err) => fail(&err.to_string()),
     };
@@ -122,7 +126,7 @@ fn main() {
         },
         recorded_by: server::interim_operator_identity(),
     };
-    match store.record_agreement(&record, None, false) {
+    match store.record_agreement(&record, &[], false) {
         Ok(sequence) => {
             println!("CONSENT-OK ('{agreement_id}' recorded at store sequence {sequence})");
         }

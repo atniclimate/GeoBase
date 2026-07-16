@@ -165,10 +165,13 @@ pub const INTERIM_OPERATOR_ENROLLMENT: &str = "a1-interim-export-token";
 /// The authenticated requester identity for an export authorized through
 /// the interim A1 operator token. B5 replaces this with the enrolled
 /// OS-keychain credential; until then the enrollment reference names the
-/// interim mechanism honestly.
+/// interim mechanism honestly. Constructs the variant directly (the const
+/// is non-empty by construction) — no `.expect()` in a request path
+/// (`AGENTS.md` Rust hygiene, review B3 F10).
 pub fn interim_operator_identity() -> ExportIdentity {
-    ExportIdentity::local_operator(INTERIM_OPERATOR_ENROLLMENT)
-        .expect("static non-empty enrollment ref")
+    ExportIdentity::LocalOperator {
+        enrollment_ref: INTERIM_OPERATOR_ENROLLMENT.to_string(),
+    }
 }
 
 /// The gate composed when exports are DISABLED (`exports_dir: None`).
@@ -456,11 +459,27 @@ async fn no_terrain_tiles() -> impl IntoResponse {
     )
 }
 
-/// Issue a node-witnessed export session (B3, design §4). The id is the
-/// only handle the SDK needs; every pack subsequently served with the
-/// session header is accumulated by the node.
-async fn api_sessions(State(state): State<ServerState>) -> Response {
-    match state.sessions.issue() {
+/// Issue a node-witnessed export session (B3, design §4). Requires the
+/// operator token (review B3 F2) so a session is bound to the
+/// authenticated operator and cannot be minted by an anonymous local
+/// page. The id is the only handle the SDK needs; every pack subsequently
+/// served with the session header is accumulated by the node.
+async fn api_sessions(State(state): State<ServerState>, headers: HeaderMap) -> Response {
+    // Sessions only mean something on an export-capable node.
+    if state.exports_dir.is_none() {
+        return status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"reason": "exports_dir is not configured for this node"}),
+            None,
+        );
+    }
+    if let Some(refused) = require_operator_token(&state, &headers) {
+        return refused;
+    }
+    match state
+        .sessions
+        .issue(&interim_operator_identity().audit_string())
+    {
         Ok(id) => status_json(StatusCode::OK, json!({"session": id}), None),
         Err(err) => status_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -470,20 +489,71 @@ async fn api_sessions(State(state): State<ServerState>) -> Response {
     }
 }
 
-/// Witness a successfully-served pack into the request's session, if the
-/// session header accompanies it. An unknown session is a loud 400 — an
-/// app that believes it is accumulating provenance must not silently
-/// accumulate nothing. Returns an error response to surface, or `None` to
-/// proceed with serving.
-fn witness_serve(state: &ServerState, headers: &HeaderMap, pack_id: &str) -> Option<Response> {
-    let session_id = headers.get(SESSION_HEADER)?.to_str().ok()?;
-    match state.sessions.witness(session_id, pack_id) {
-        Ok(()) => None,
-        Err(err) => Some(status_json(
-            StatusCode::BAD_REQUEST,
-            json!({"reason": err.to_string()}),
+/// Verify the interim A1 operator token when exports are enabled. Returns
+/// `Some(response)` to refuse (503 misconfigured / 403 wrong), or `None`
+/// to proceed. Shared by `api_sessions` and `api_export`.
+fn require_operator_token(state: &ServerState, headers: &HeaderMap) -> Option<Response> {
+    let expected = state
+        .export_token
+        .clone()
+        .filter(|token| !token.trim().is_empty());
+    let Some(expected) = expected else {
+        return Some(status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"reason": "exports are enabled but no non-empty export token is \
+                              configured (interim operator guard, Phase A — set one at boot)"}),
+            None,
+        ));
+    };
+    let provided = headers
+        .get(EXPORT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if provided.is_some_and(|candidate| token_matches(&expected, candidate)) {
+        None
+    } else {
+        Some(status_json(
+            StatusCode::FORBIDDEN,
+            json!({"reason": "missing or invalid export token (interim operator guard — Phase A)"}),
+            None,
+        ))
+    }
+}
+
+/// Gate and witness a data serve against an export session (review B3 F2).
+///
+/// On an **export-enabled** node, a source-data serve MUST carry a valid,
+/// open session header — otherwise a client could view a pack outside any
+/// session and later omit it from an export's source set (a consent-scope
+/// evasion). The pack is then witnessed into that session. On a
+/// viewer-only node (`exports_dir: None`) there is nothing to export, so
+/// no session is required and a present header is witnessed best-effort.
+///
+/// Returns `Some(response)` to refuse the serve, or `None` to proceed.
+fn session_gate_and_witness(
+    state: &ServerState,
+    headers: &HeaderMap,
+    pack_id: &str,
+) -> Option<Response> {
+    let session_id = headers.get(SESSION_HEADER).and_then(|v| v.to_str().ok());
+    let exports_enabled = state.exports_dir.is_some();
+    match session_id {
+        Some(id) => match state.sessions.witness(id, pack_id) {
+            Ok(()) => None,
+            Err(err) => Some(status_json(
+                StatusCode::BAD_REQUEST,
+                json!({"reason": err.to_string()}),
+                None,
+            )),
+        },
+        None if exports_enabled => Some(status_json(
+            StatusCode::FORBIDDEN,
+            json!({"reason": "this export-capable node requires an export session \
+                             (x-geobase-session) on source-data serves so the export \
+                             source set is complete — obtain one from POST /api/sessions"}),
             None,
         )),
+        // Viewer-only node: nothing to export, no session needed.
+        None => None,
     }
 }
 
@@ -500,7 +570,10 @@ async fn api_pack_layers(
         );
     };
 
-    let tier = entry.tier;
+    // Re-resolve the pack's CURRENT tier from the artifact (review B3
+    // F1a) — a pack reclassified up while the node runs must not still be
+    // served at its boot-cached tier.
+    let tier = crate::vault::current_effective_tier(&entry.path);
     if !matches!(tier, Tier::T0 | Tier::T1) {
         return status_json(
             StatusCode::FORBIDDEN,
@@ -512,8 +585,9 @@ async fn api_pack_layers(
         );
     }
     // The node witnesses the serve (design §4) — a refused pack was never
-    // served and is deliberately NOT witnessed.
-    if let Some(refused) = witness_serve(&state, &headers, &entry.id) {
+    // served and is deliberately NOT witnessed. On an export-capable node
+    // a valid session is required here (review B3 F2).
+    if let Some(refused) = session_gate_and_witness(&state, &headers, &entry.id) {
         return refused;
     }
 
@@ -652,9 +726,15 @@ async fn api_export(
     let requester = interim_operator_identity();
 
     // B3 (design §4): the source set is the NODE'S session record — every
-    // pack served into the named session, period. No valid session →
-    // refuse, with a refusal row. The request cannot add or subtract.
-    let witnessed_ids = match state.sessions.source_set(&parsed.session) {
+    // pack served into the named session, period. The session is
+    // CONSUMED here (owner-checked, single-use — review B3 F2): the source
+    // set is snapshotted and the session closed so it cannot be replayed or
+    // extended. No valid open session bound to this operator → refuse with
+    // a refusal row. The request cannot add or subtract.
+    let witnessed_ids = match state
+        .sessions
+        .consume(&parsed.session, &requester.audit_string())
+    {
         Ok(ids) => ids,
         Err(err) => {
             let reason = format!(
@@ -793,16 +873,27 @@ async fn api_export(
             let status = match &err {
                 // Governance denial (design §5.3): 403 + refusal row.
                 ExportError::Refused(_) => StatusCode::FORBIDDEN,
-                ExportError::Invalid(_) => StatusCode::BAD_REQUEST,
+                // Client-input problems: a malformed request, or a painted
+                // product that fails the zero-source-disclosure verifier
+                // (the operator traced a source) — the node withholds it,
+                // and the caller must paint differently.
+                ExportError::Invalid(_) | ExportError::Verification(_) => StatusCode::BAD_REQUEST,
                 ExportError::Exists(_) => StatusCode::CONFLICT,
                 // Infrastructure failure (design §5.3): 503, never
                 // attributed to the sovereign ceremony. Fail-closed
-                // encryption is the same class: the node is not
-                // provisioned to store the T3 ledger safely.
-                ExportError::Infrastructure(_) | ExportError::Encryption(_) => {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
+                // encryption, ledger write failures, product write
+                // failures, and publication I/O failures are all this
+                // class — the node is not provisioned to store the T3
+                // ledger safely or could not durably publish (review B3
+                // F6, closing the earlier 500 misclassification).
+                ExportError::Infrastructure(_)
+                | ExportError::Encryption(_)
+                | ExportError::Ledger(_)
+                | ExportError::Io(_)
+                | ExportError::Write(_) => StatusCode::SERVICE_UNAVAILABLE,
+                // Only a genuinely unexpected internal state (e.g. a
+                // simulated crash leaking to the route) is 500.
+                ExportError::SimulatedCrash(_) => StatusCode::INTERNAL_SERVER_ERROR,
             };
             status_json(status, json!({"reason": err.to_string()}), None)
         }
@@ -879,7 +970,8 @@ async fn api_pack_table_features(
         );
     };
 
-    let tier = entry.tier;
+    // Re-resolve the pack's CURRENT tier from the artifact (review B3 F1a).
+    let tier = crate::vault::current_effective_tier(&entry.path);
     let Some(table_info) = entry.tables.iter().find(|info| info.name == table) else {
         return status_json(
             StatusCode::NOT_FOUND,
@@ -911,9 +1003,10 @@ async fn api_pack_table_features(
             Some(tier),
         );
     }
-    // Witness the serve into the session, if one accompanies the request
-    // (design §4) — feature data is exactly what a product derives from.
-    if let Some(refused) = witness_serve(&state, &headers, &entry.id) {
+    // Witness the serve into the session (design §4) — feature data is
+    // exactly what a product derives from; an export-capable node requires
+    // a valid session here (review B3 F2).
+    if let Some(refused) = session_gate_and_witness(&state, &headers, &entry.id) {
         return refused;
     }
 
@@ -1398,6 +1491,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/sessions")
                     .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, "a4-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1500,6 +1594,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/sessions")
                     .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, "infra-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1694,6 +1789,15 @@ mod tests {
                 (&geom, "alpha", 7_i64, 2.5_f64),
             )
             .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T0,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
+        .unwrap();
         drop(gpkg);
 
         let entry = CatalogEntry {
@@ -1743,6 +1847,15 @@ mod tests {
                 bounds: (-123.5, 48.5, -123.5, 48.5),
             },
         )
+        .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T0,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
         .unwrap();
         drop(gpkg);
 
@@ -1931,6 +2044,15 @@ mod tests {
                 bounds: (-123.5, 48.5, -123.5, 48.5),
             },
         )
+        .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T0,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
         .unwrap();
         drop(gpkg);
 
@@ -2363,6 +2485,18 @@ mod tests {
             },
         )
         .unwrap();
+        // Tag T1 so the export's fresh-tier re-resolution reads T1 from the
+        // artifact (review B3 F1) rather than defaulting an untagged pack
+        // to T3.
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T1,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
+        .unwrap();
         drop(gpkg);
         let entry = CatalogEntry {
             id: "capacity-2026".into(),
@@ -2411,7 +2545,7 @@ mod tests {
                         conditions: Conditions::default(),
                         recorded_by: super::interim_operator_identity(),
                     },
-                    None,
+                    &[],
                     false,
                 )
                 .unwrap();
@@ -2434,6 +2568,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/sessions")
                     .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, "route-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2508,6 +2643,37 @@ mod tests {
         assert!(exports_dir.join("node-audit.gpkg").is_file());
 
         // Same product name again -> 409, no overwrite through the API.
+        // Sessions are single-use (consumed at export, review B3 F2), so
+        // the duplicate attempt opens a FRESH session and re-witnesses the
+        // pack — the realistic flow.
+        let session2 = {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/api/sessions")
+                        .header(header::HOST, "127.0.0.1")
+                        .header(EXPORT_TOKEN_HEADER, "route-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let s = json_response(response).await["session"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            app.clone()
+                .oneshot(
+                    Request::get("/api/packs/capacity-2026/tables/capacity/features")
+                        .header(header::HOST, "127.0.0.1")
+                        .header(crate::session::SESSION_HEADER, s.clone())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            s
+        };
         let response = app
             .oneshot(
                 Request::post("/api/export")
@@ -2516,9 +2682,7 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "product": "route-site",
-                            // Sessions are reusable: the same witnessed
-                            // session backs the duplicate attempt.
-                            "session": session,
+                            "session": session2,
                             "features": [{
                                 "geometry": {
                                     "type": "Polygon",

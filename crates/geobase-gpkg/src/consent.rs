@@ -63,6 +63,16 @@ impl Sha256Digest {
         Ok(Self(bytes))
     }
 
+    /// Compute the digest of `bytes` — used to commit a proof-core hash
+    /// over identifying evidence detail (§9) so future compaction can
+    /// retain proof of what the agreement carried.
+    pub fn of_bytes(bytes: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&Sha256::digest(bytes));
+        Self(out)
+    }
+
     pub fn to_hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }

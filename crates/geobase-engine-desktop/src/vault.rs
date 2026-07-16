@@ -158,6 +158,21 @@ fn read_tables(gpkg: &GeoPackage, path: &str) -> Result<Vec<TableInfo>, VaultErr
     Ok(tables)
 }
 
+/// Re-resolve a pack's **current** effective tier by reopening the
+/// artifact and reading its TSDF tags right now — NOT the tier cached in
+/// the boot catalog (review B3 F1a). A pack reclassified or replaced while
+/// the node is up must be evaluated at its present classification.
+/// Missing, unreadable, or unclassifiable → **T3** (fail-closed, "when in
+/// doubt, T3"): a node that cannot currently prove a low tier must treat
+/// the pack as sovereign.
+pub fn current_effective_tier(path: &Path) -> Tier {
+    match GeoPackage::open(path).and_then(|gpkg| gpkg.geopackage_tier()) {
+        Ok(Some(tier)) => tier,
+        // Untagged artifact or read failure — sovereign by default.
+        Ok(None) | Err(_) => Tier::T3,
+    }
+}
+
 /// The reserved file name of the T3 export ledger (`export.rs`). Never
 /// catalogued, wherever it is found.
 pub const RESERVED_LEDGER_NAME: &str = "node-audit.gpkg";

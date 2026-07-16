@@ -110,7 +110,7 @@ impl RecordedConsentGate {
         let store = self.open_store()?;
         let source_set: Vec<String> = auth.source_packs.iter().map(|p| p.id.clone()).collect();
         let matched = store
-            .match_agreement(&source_set, auth.requester, observed_at)
+            .match_agreement(&source_set, auth.requester, auth.product_class, observed_at)
             .map_err(|e| CeremonyError::Infrastructure {
                 reason: e.to_string(),
             })?
@@ -147,6 +147,7 @@ impl RecordedConsentGate {
             consent: Some(ConsentProvenance {
                 agreement_id: matched.agreement_id,
                 consent_store_sequence: matched.store_sequence,
+                product_class: matched.product_class,
                 evidence: fpic.consent_basis().clone(),
             }),
         })
@@ -169,7 +170,7 @@ impl CeremonyGate for RecordedConsentGate {
         &self,
         auth: &ExportAuthorization<'_>,
         record: &CeremonyRecord,
-    ) -> Result<(), CeremonyError> {
+    ) -> Result<Option<i64>, CeremonyError> {
         let fresh = self.check(auth)?;
         let (Some(original), Some(current)) = (&record.consent, &fresh.consent) else {
             return Err(CeremonyError::Infrastructure {
@@ -187,7 +188,9 @@ impl CeremonyGate for RecordedConsentGate {
                 observed_at: Some(fresh.observed_at),
             }));
         }
-        Ok(())
+        // The revalidated sequence (design §10): a revocation committing
+        // AFTER this snapshot governs the next export, not this one.
+        Ok(Some(current.consent_store_sequence))
     }
 }
 
@@ -254,7 +257,7 @@ mod tests {
                     conditions: Conditions::default(),
                     recorded_by: operator(),
                 },
-                None,
+                &[],
                 false,
             )
             .unwrap();
@@ -279,6 +282,7 @@ mod tests {
             product: "wind-north",
             source_packs: packs,
             product_tier,
+            product_class: "painted-opportunity-shapefile",
             requester,
             purpose: Some("unit test"),
         }
@@ -421,7 +425,7 @@ mod tests {
                     },
                     recorded_by: operator(),
                 },
-                None,
+                &[],
                 false,
             )
             .unwrap();
@@ -510,14 +514,16 @@ mod tests {
                     agreement_id: "a2".into(),
                     kind: AgreementKind::TribalSigned,
                     source_scope: vec!["dem".into()],
-                    product_class: "x".into(),
+                    // Same class as the auth so the refusal under test is
+                    // the lineage-head change, not a product-class mismatch.
+                    product_class: "painted-opportunity-shapefile".into(),
                     evidence,
                     authority_of_record: "Example Signatory".into(),
                     requester_binding: operator(),
                     conditions: Conditions::default(),
                     recorded_by: operator(),
                 },
-                Some("a1"),
+                &["a1"],
                 false,
             )
             .unwrap();
@@ -547,14 +553,14 @@ mod tests {
                     agreement_id: "individual".into(),
                     kind: AgreementKind::IndividualWitnessed,
                     source_scope: vec!["interviews".into()],
-                    product_class: "x".into(),
+                    product_class: "painted-opportunity-shapefile".into(),
                     evidence,
                     authority_of_record: "The consenting individual (witnessed)".into(),
                     requester_binding: operator(),
                     conditions: Conditions::default(),
                     recorded_by: operator(),
                 },
-                None,
+                &[],
                 false,
             )
             .unwrap();

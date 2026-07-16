@@ -96,6 +96,11 @@ pub const PRODUCT_FIELDS: [&str; 3] = ["id", "area_m2", "score"];
 /// The product tier every export is stamped with.
 pub const PRODUCT_TIER: Tier = Tier::T2;
 
+/// The class of derived product this pipeline emits (a recorded agreement
+/// term, design §3.2): the matched consent agreement must authorize THIS
+/// class. Fixed for the 1.3 painted-opportunity flow.
+pub const PRODUCT_CLASS: &str = "painted-opportunity-shapefile";
+
 /// The hidden staging area for in-flight publications (same volume as the
 /// final bundles, so the publish rename is atomic).
 const STAGING_DIR: &str = ".staging";
@@ -220,9 +225,22 @@ pub fn record_unauthenticated_refusal(
                        guard — Phase A A1; refused before the request body was \
                        read, so no product/requester is attributed; the ceremony \
                        seam was never consulted)",
+            // The node-clock instant this refusal was decided at (review
+            // B3 F6): every governance refusal carries when it happened,
+            // even pre-gate ones. None only if the clock is implausible.
+            "observed_at": observed_at_or_none(),
         }),
     })?;
     Ok(())
+}
+
+/// The checked node-clock instant, or `None` if the clock is implausible.
+/// Used to stamp refusal rows with when the decision was made without
+/// letting a bad clock fail the refusal itself.
+fn observed_at_or_none() -> Option<String> {
+    geobase_gpkg::consent::UtcInstant::now()
+        .ok()
+        .map(|t| t.to_rfc3339())
 }
 
 /// Append an `export.refused` row for a governance refusal decided BEFORE
@@ -244,7 +262,7 @@ pub fn record_declined_refusal(
         actor: requester.audit_string(),
         tsdf_version,
         tsdf_source_origin: tsdf_origin,
-        details: serde_json::json!({ "reason": reason }),
+        details: serde_json::json!({ "reason": reason, "observed_at": observed_at_or_none() }),
     })?;
     Ok(())
 }
@@ -282,19 +300,26 @@ pub(crate) fn export_product_inner(
     let (tsdf_version, tsdf_origin) = tsdf_info()?;
 
     // The node-witnessed authorization input (design §4): ids + tiers from
-    // the session-resolved sources. An empty set resolves to T3 inside the
-    // authorization type and the floor refuses.
+    // the session-resolved sources. The tier is RE-RESOLVED FROM THE
+    // ARTIFACT ON DISK here (review B3 F1) — the caller-supplied
+    // `SourcePack.tier` is advisory and cannot forge a low tier; a pack
+    // with no resolvable artifact is T3. An empty set resolves to T3
+    // inside the authorization type and the floor refuses.
     let witnesses: Vec<SourcePackWitness> = sources
         .iter()
         .map(|s| SourcePackWitness {
             id: s.id.clone(),
-            tier: s.tier,
+            tier: match &s.path {
+                Some(path) => crate::vault::current_effective_tier(path),
+                None => Tier::T3,
+            },
         })
         .collect();
     let auth = ExportAuthorization {
         product: &request.product,
         source_packs: &witnesses,
         product_tier: PRODUCT_TIER,
+        product_class: PRODUCT_CLASS,
         requester,
         purpose: request.purpose.as_deref(),
     };
@@ -470,17 +495,20 @@ fn publish(
 
     // Step 3 — revalidate consent at the publication point (§10), then
     // seal exactly one ceremony + one t2 row, `prepared`, in ONE txn.
-    if let Err(ceremony_error) = gate.revalidate(auth, &record) {
-        return Err(record_gate_failure(
-            cipher,
-            exports_dir,
-            tsdf_version,
-            tsdf_origin,
-            request,
-            auth,
-            ceremony_error,
-        ));
-    }
+    let revalidated_sequence = match gate.revalidate(auth, &record) {
+        Ok(sequence) => sequence,
+        Err(ceremony_error) => {
+            return Err(record_gate_failure(
+                cipher,
+                exports_dir,
+                tsdf_version,
+                tsdf_origin,
+                request,
+                auth,
+                ceremony_error,
+            ));
+        }
+    };
     let area_m2_total: f64 = areas.iter().sum();
     let tx = ledger
         .conn()
@@ -489,6 +517,14 @@ fn publish(
     let mut ceremony_details = record.audit_details(auth, &resolved_source_hashes);
     ceremony_details["publication_id"] = serde_json::json!(publication_id);
     ceremony_details["state"] = serde_json::json!("prepared");
+    // Record the consent-store sequence observed AT THE PUBLICATION POINT
+    // (design §10 linearization, review B3 F3) — the sealed row reflects
+    // the revalidated snapshot, not the authorization-time one.
+    if let Some(sequence) = revalidated_sequence {
+        ceremony_details["consent_store_sequence"] = serde_json::json!(sequence);
+        ceremony_details["consent_store_sequence_at_authorization"] =
+            record.audit_details(auth, &resolved_source_hashes)["consent_store_sequence"].clone();
+    }
     let ceremony_id = ledger.append_audit(&geobase_gpkg::AuditEntry {
         dataset_id: request.product.clone(),
         action: "export.ceremony".into(),
@@ -511,8 +547,9 @@ fn publish(
             "features": request.features.len(),
             "area_m2_total": area_m2_total,
             "files": files.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
-            "source_packs": sources.iter().map(|s| {
-                serde_json::json!({"id": s.id, "tier": s.tier.code()})
+            // Re-resolved (node-authoritative) tiers, not the caller hint.
+            "source_packs": auth.source_packs.iter().map(|p| {
+                serde_json::json!({"id": p.id, "tier": p.tier.code()})
             }).collect::<Vec<_>>(),
         }),
     })?;
@@ -672,14 +709,23 @@ pub fn recover_publications(
     let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
     let trail = ledger.audit_trail()?;
 
-    // Fold the trail per publication id.
+    // Fold the trail per publication id, counting rows so a malformed or
+    // duplicated protocol trail can be REFUSED rather than trusted (review
+    // B3 F4). A publication only finalizes with EXACTLY one intent, one
+    // prepared ceremony, and one prepared t2 — all naming the same
+    // product.
     #[derive(Default)]
     struct PubState {
         product: String,
+        datasets: std::collections::BTreeSet<String>,
+        intent: u32,
+        ceremony_prepared: u32,
+        t2_prepared: u32,
         prepared_files: Option<serde_json::Map<String, serde_json::Value>>,
+        t2_count: u32,
+        ceremony_count: u32,
         published: bool,
         aborted: bool,
-        intent: bool,
     }
     let mut publications: std::collections::BTreeMap<String, PubState> = Default::default();
     for row in &trail {
@@ -687,18 +733,32 @@ pub fn recover_publications(
             continue;
         };
         let state = publications.entry(pub_id.to_string()).or_default();
+        let prepared = row.details.get("state").and_then(|v| v.as_str()) == Some("prepared");
         match row.action.as_str() {
             "export.intent" => {
-                state.intent = true;
+                state.intent += 1;
                 state.product = row.dataset_id.clone();
+                state.datasets.insert(row.dataset_id.clone());
+            }
+            "export.ceremony" => {
+                state.ceremony_count += 1;
+                state.datasets.insert(row.dataset_id.clone());
+                if prepared {
+                    state.ceremony_prepared += 1;
+                }
             }
             "export.t2" => {
+                state.t2_count += 1;
                 state.product = row.dataset_id.clone();
-                state.prepared_files = row
-                    .details
-                    .get("files")
-                    .and_then(|f| f.as_object())
-                    .cloned();
+                state.datasets.insert(row.dataset_id.clone());
+                if prepared {
+                    state.t2_prepared += 1;
+                    state.prepared_files = row
+                        .details
+                        .get("files")
+                        .and_then(|f| f.as_object())
+                        .cloned();
+                }
             }
             "export.published" => state.published = true,
             "export.aborted" => state.aborted = true,
@@ -714,10 +774,19 @@ pub fn recover_publications(
         let staging_dir = exports_dir.join(STAGING_DIR).join(&publication_id);
         let bundle_dir = exports_dir.join(&state.product);
 
+        // A well-formed sealed publication: exactly one intent + one
+        // prepared ceremony + one prepared t2, all naming ONE product,
+        // with a files manifest. Anything else is malformed → abort.
+        let sealed_ok = state.intent == 1
+            && state.ceremony_prepared == 1
+            && state.ceremony_count == 1
+            && state.t2_prepared == 1
+            && state.t2_count == 1
+            && state.datasets.len() == 1;
+
         let action = match &state.prepared_files {
-            // Prepared: the seal committed. Finalize if the bytes verify.
-            Some(files) => {
-                if bundle_dir.is_dir() && bundle_hashes_match(&bundle_dir, files) {
+            Some(files) if sealed_ok => {
+                if bundle_dir.is_dir() && bundle_exact_match(&bundle_dir, files) {
                     // Crash was between rename and finalize.
                     append_recovery_row(
                         &ledger,
@@ -730,7 +799,7 @@ pub fn recover_publications(
                     )?;
                     let _ = std::fs::remove_dir_all(&staging_dir);
                     RecoveryAction::FinalizedAfterRename { publication_id }
-                } else if staging_dir.is_dir() && bundle_hashes_match(&staging_dir, files) {
+                } else if staging_dir.is_dir() && bundle_exact_match(&staging_dir, files) {
                     // Crash was between seal and rename: complete step 4+5.
                     std::fs::rename(&staging_dir, &bundle_dir)?;
                     append_recovery_row(
@@ -745,7 +814,7 @@ pub fn recover_publications(
                     RecoveryAction::FinalizedAfterRename { publication_id }
                 } else {
                     let reason = "prepared publication has no verifiable bundle \
-                                  (staging missing or hashes do not match) — aborted"
+                                  (staging missing, hashes differ, or extra/missing files) — aborted"
                         .to_string();
                     append_recovery_row(
                         &ledger,
@@ -763,9 +832,37 @@ pub fn recover_publications(
                     }
                 }
             }
-            // Intent only: nothing was sealed; the truthful outcome is an
-            // abort (the staged partial, if any, was never verified).
-            None if state.intent => {
+            // Sealed rows present but the protocol trail is malformed
+            // (missing ceremony, duplicated rows, mismatched product): the
+            // node cannot prove which ceremony sealed this bundle → abort,
+            // never publish an unverifiable pairing.
+            Some(_) => {
+                let reason = format!(
+                    "malformed publication trail (intents={}, ceremony_prepared={}, \
+                     t2_prepared={}, distinct_products={}) — cannot prove a single \
+                     sealed ceremony/t2 pair; aborted",
+                    state.intent,
+                    state.ceremony_prepared,
+                    state.t2_prepared,
+                    state.datasets.len()
+                );
+                append_recovery_row(
+                    &ledger,
+                    &tsdf_version,
+                    &tsdf_origin,
+                    &state.product,
+                    "export.aborted",
+                    &publication_id,
+                    &reason,
+                )?;
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                RecoveryAction::Aborted {
+                    publication_id,
+                    reason,
+                }
+            }
+            // Intent (or partial) only, no seal: nothing was published.
+            None if state.intent >= 1 || state.ceremony_count >= 1 || state.t2_count >= 1 => {
                 let reason = "publication crashed before the ceremony seal — nothing was published"
                     .to_string();
                 append_recovery_row(
@@ -787,8 +884,6 @@ pub fn recover_publications(
         };
         actions.push(action);
     }
-    // Fix up the Finalized-vs-FinalizedAfterRename distinction for the
-    // staged-then-published case (cosmetic; both are successful recovery).
     Ok(actions)
 }
 
@@ -817,20 +912,41 @@ fn append_recovery_row(
     Ok(())
 }
 
-/// Verify every file named in the prepared row exists in `dir` with the
-/// recorded hash — the recovery decision is evidence-based, never hopeful.
-fn bundle_hashes_match(dir: &Path, files: &serde_json::Map<String, serde_json::Value>) -> bool {
+/// Verify the directory's file set EXACTLY equals the sealed manifest —
+/// every named file present with the recorded hash, and **no extra files**
+/// (review B3 F4: a subset check would let an unsealed file, even T3, ride
+/// along into a published bundle). The recovery decision is evidence-based
+/// and exact, never hopeful.
+fn bundle_exact_match(dir: &Path, files: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if files.is_empty() {
+        return false;
+    }
+    // Every sealed file present with the recorded hash.
     for (name, expected) in files {
         let Some(expected) = expected.as_str() else {
             return false;
         };
-        let path = dir.join(name);
-        match sha256_hex(&path) {
+        match sha256_hex(&dir.join(name)) {
             Ok(actual) if actual == expected => {}
             _ => return false,
         }
     }
-    !files.is_empty()
+    // No EXTRA files: enumerate the directory and require its file set to
+    // be exactly the sealed set (a directory we cannot read is a fail).
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut on_disk = 0usize;
+    for entry in entries {
+        let Ok(entry) = entry else { return false };
+        // Only regular files count; a stray subdirectory is also "extra".
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !files.contains_key(&name) {
+            return false; // an unsealed file is present — refuse
+        }
+        on_disk += 1;
+    }
+    on_disk == files.len()
 }
 
 /// Request validation — total and loud, naming the offender.
@@ -1229,6 +1345,18 @@ mod tests {
                 [gpkg_polygon_blob(ring)],
             )
             .unwrap();
+        // Write a real TSDF tag so the export pipeline's fresh-tier
+        // re-resolution (review B3 F1) reads the intended tier from the
+        // artifact — an untagged pack now resolves to T3 by design.
+        gpkg.write_tsdf_tag(&geobase_gpkg::TsdfTag {
+            table: None,
+            tier,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:test".into(),
+            classified_by: "test".into(),
+            extras: serde_json::Map::new(),
+        })
+        .unwrap();
         drop(gpkg);
         SourcePack {
             id: name.into(),
@@ -1667,7 +1795,7 @@ mod tests {
                     },
                     recorded_by: requester.clone(),
                 },
-                None,
+                &[],
                 false,
             )
             .unwrap();

@@ -79,6 +79,10 @@ pub struct ExportAuthorization<'a> {
     pub source_packs: &'a [SourcePackWitness],
     /// Tier stamped on the exported product itself (RStep: T2).
     pub product_tier: Tier,
+    /// The class of derived product (a recorded agreement term, §3.2): the
+    /// matched agreement must authorize THIS class. Fixed per SoLO app in
+    /// 1.0 (RStep: `painted-opportunity-shapefile`).
+    pub product_class: &'a str,
     /// The AUTHENTICATED actor asking. Typed — free text is abolished.
     pub requester: &'a ExportIdentity,
     /// Free-text purpose, recorded verbatim in the ceremony record
@@ -110,6 +114,9 @@ pub struct ConsentProvenance {
     /// The consent-store sequence snapshot at authorization (design §10:
     /// revalidated at the publication point).
     pub consent_store_sequence: i64,
+    /// The product class the matched agreement authorizes (§3.2) — copied
+    /// forward so the ledger row is self-contained for that term.
+    pub product_class: String,
     /// The agreement's evidence, copied forward so the row stands alone.
     pub evidence: ConsentBasis,
 }
@@ -162,6 +169,7 @@ impl CeremonyRecord {
             "observed_at": self.observed_at.to_rfc3339(),
             "agreement_id": self.consent.as_ref().map(|c| c.agreement_id.clone()),
             "consent_store_sequence": self.consent.as_ref().map(|c| c.consent_store_sequence),
+            "product_class": self.consent.as_ref().map(|c| c.product_class.clone()),
             "evidence": self.consent.as_ref().map(|c| c.evidence.audit_json()),
             "product": auth.product,
             "resolved_sources": auth
@@ -234,26 +242,34 @@ pub trait CeremonyGate {
     /// (design §10 export linearization: snapshot at authorization,
     /// revalidate at the §6 step-3/4 boundary). A consent change that
     /// committed between authorization and publication aborts THIS export;
-    /// one that commits after governs the next. The default is a no-op —
-    /// only a gate with a consent store has anything to revalidate.
+    /// one that commits after governs the next. Returns the consent-store
+    /// sequence observed AT THE PUBLICATION POINT (`Some` for a sovereign
+    /// gate) so the sealed ceremony row records the revalidated sequence,
+    /// not the authorization-time one. The default is a no-op returning
+    /// `None` — only a gate with a consent store has anything to
+    /// revalidate.
     fn revalidate(
         &self,
         _auth: &ExportAuthorization<'_>,
         _record: &CeremonyRecord,
-    ) -> Result<(), CeremonyError> {
-        Ok(())
+    ) -> Result<Option<i64>, CeremonyError> {
+        Ok(None)
     }
 }
 
 /// The development gate: authorizes T0–T2 with the provisional basis
-/// recorded verbatim, refuses T3 unconditionally. **No longer composed by
-/// any release binary after B3** — the sovereign gate replaced it at the
-/// single `server.rs` `router()` composition point; it survives for tests
-/// and local tooling that need a store-less gate. Carries no configuration
-/// on purpose — there is nothing to widen.
+/// recorded verbatim, refuses T3 unconditionally. **Not compiled into
+/// release builds after B3** — it is gated behind `cfg(test)` / the
+/// `test-support` feature so no production composition (and no downstream
+/// release-code caller of `export_product`) can reach it; the sovereign
+/// gate replaced it at the single `server.rs` `router()` composition
+/// point. It survives only for tests and store-less test tooling. Carries
+/// no configuration on purpose — there is nothing to widen.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProvisionalDevGate;
 
+#[cfg(any(test, feature = "test-support"))]
 impl CeremonyGate for ProvisionalDevGate {
     fn authorize_export(
         &self,
@@ -313,6 +329,7 @@ mod tests {
                 product: "rstep-fixture",
                 source_packs: &packs,
                 product_tier: product,
+                product_class: "painted-opportunity-shapefile",
                 requester: &requester,
                 purpose: Some("unit test"),
             };
@@ -337,6 +354,7 @@ mod tests {
                 product: "rstep-fixture",
                 source_packs: &packs,
                 product_tier: Tier::T2,
+                product_class: "painted-opportunity-shapefile",
                 requester: &requester,
                 purpose: None,
             };
@@ -358,6 +376,7 @@ mod tests {
             product: "nothing-served",
             source_packs: &[],
             product_tier: Tier::T2,
+            product_class: "painted-opportunity-shapefile",
             requester: &requester,
             purpose: None,
         };
@@ -377,6 +396,7 @@ mod tests {
             product: "rstep-fixture",
             source_packs: &packs,
             product_tier: Tier::T2,
+            product_class: "painted-opportunity-shapefile",
             requester: &requester,
             purpose: Some("unit test"),
         };
