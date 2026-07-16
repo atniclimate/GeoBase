@@ -306,8 +306,7 @@ impl ConsentStore {
                 "agreement_id must be non-empty".into(),
             ));
         }
-        if record.source_scope.is_empty()
-            || record.source_scope.iter().any(|s| s.trim().is_empty())
+        if record.source_scope.is_empty() || record.source_scope.iter().any(|s| s.trim().is_empty())
         {
             return Err(ConsentStoreError::InvalidRecord(
                 "source_scope must be a non-empty set of pack ids".into(),
@@ -328,11 +327,13 @@ impl ConsentStore {
         // error, refused loudly.
         let kind_matches = matches!(
             (record.kind, &record.evidence),
-            (AgreementKind::TribalSigned, ConsentBasis::SignedAgreement { .. })
-                | (
-                    AgreementKind::IndividualWitnessed,
-                    ConsentBasis::WitnessedVerbal { .. }
-                )
+            (
+                AgreementKind::TribalSigned,
+                ConsentBasis::SignedAgreement { .. }
+            ) | (
+                AgreementKind::IndividualWitnessed,
+                ConsentBasis::WitnessedVerbal { .. }
+            )
         );
         if !kind_matches {
             return Err(ConsentStoreError::InvalidRecord(format!(
@@ -392,8 +393,8 @@ impl ConsentStore {
                 ),
             };
 
-        let source_scope_json = serde_json::to_string(&record.source_scope)
-            .map_err(GpkgError::from)?;
+        let source_scope_json =
+            serde_json::to_string(&record.source_scope).map_err(GpkgError::from)?;
 
         // One transaction: agreement proof-core + evidence detail + the
         // lineage events. All-or-nothing — a half-recorded agreement is
@@ -415,7 +416,11 @@ impl ConsentStore {
                 record.product_class.trim(),
                 record.authority_of_record.trim(),
                 record.requester_binding.audit_string(),
-                record.conditions.expires_at.as_ref().map(UtcInstant::to_rfc3339),
+                record
+                    .conditions
+                    .expires_at
+                    .as_ref()
+                    .map(UtcInstant::to_rfc3339),
                 record.conditions.purpose_limit,
                 record.conditions.geography_limit,
                 evidence_hash,
@@ -439,7 +444,11 @@ impl ConsentStore {
         if let Some(predecessor) = supersedes {
             // The predecessor's lineage carries its own explicit event —
             // its history shows WHAT superseded it, not just that it was.
-            let kind = if correction { "corrected_by" } else { "superseded_by" };
+            let kind = if correction {
+                "corrected_by"
+            } else {
+                "superseded_by"
+            };
             tx.execute(
                 "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at, \
                  related_agreement) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -730,7 +739,10 @@ fn rebuild_evidence(row: &StoredAgreement, now: UtcInstant) -> Result<ConsentBas
     match row.kind.as_str() {
         "tribal_signed" => {
             let document_ref = row.document_ref.as_deref().ok_or("missing document_ref")?;
-            let hash_hex = row.evidence_hash.as_deref().ok_or("missing evidence_hash")?;
+            let hash_hex = row
+                .evidence_hash
+                .as_deref()
+                .ok_or("missing evidence_hash")?;
             let acknowledged = row
                 .acknowledged_at
                 .as_deref()
@@ -857,10 +869,7 @@ mod tests {
         assert_eq!(gpkg.geopackage_tier().unwrap(), Some(Tier::T3));
         let tags = gpkg.read_tsdf_tags().unwrap();
         let tag = tags.iter().find(|t| t.scope == "geopackage").unwrap();
-        assert_eq!(
-            tag.payload["at_rest"],
-            crate::cipher::UNENCRYPTED_DEV_STAMP
-        );
+        assert_eq!(tag.payload["at_rest"], crate::cipher::UNENCRYPTED_DEV_STAMP);
     }
 
     #[test]
@@ -886,7 +895,10 @@ mod tests {
         let mut individual = agreement("a-individual", &["interviews"]);
         individual.kind = AgreementKind::IndividualWitnessed;
         individual.evidence = ConsentBasis::witnessed_verbal(
-            vec![Witness::new("Witness A").unwrap(), Witness::new("Witness B").unwrap()],
+            vec![
+                Witness::new("Witness A").unwrap(),
+                Witness::new("Witness B").unwrap(),
+            ],
             "operator verified both witnesses in person",
         )
         .unwrap();
@@ -897,15 +909,24 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(matched.agreement_id, "a-tribal");
-        assert_eq!(matched.authority_of_record, "Example Signatory, Example Nation");
-        assert!(matches!(matched.evidence, ConsentBasis::SignedAgreement { .. }));
+        assert_eq!(
+            matched.authority_of_record,
+            "Example Signatory, Example Nation"
+        );
+        assert!(matches!(
+            matched.evidence,
+            ConsentBasis::SignedAgreement { .. }
+        ));
         assert!(matched.store_sequence > 0);
 
         let matched = s
             .match_agreement(&set(&["interviews"]), &operator(), now())
             .unwrap()
             .unwrap();
-        assert!(matches!(matched.evidence, ConsentBasis::WitnessedVerbal { .. }));
+        assert!(matches!(
+            matched.evidence,
+            ConsentBasis::WitnessedVerbal { .. }
+        ));
     }
 
     #[test]

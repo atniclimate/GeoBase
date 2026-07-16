@@ -92,17 +92,15 @@ impl UtcInstant {
     pub fn now() -> Result<Self, ConsentSchemaError> {
         let now = OffsetDateTime::now_utc();
         if now.unix_timestamp() < CLOCK_FLOOR_UNIX || now.year() > 9000 {
-            return Err(ConsentSchemaError::ImplausibleClock(
-                Self(now).to_rfc3339(),
-            ));
+            return Err(ConsentSchemaError::ImplausibleClock(Self(now).to_rfc3339()));
         }
         Ok(Self(now))
     }
 
     pub fn to_rfc3339(&self) -> String {
-        self.0
-            .format(&Rfc3339)
-            .unwrap_or_else(|_| format!("(unformattable instant: unix {})", self.0.unix_timestamp()))
+        self.0.format(&Rfc3339).unwrap_or_else(|_| {
+            format!("(unformattable instant: unix {})", self.0.unix_timestamp())
+        })
     }
 
     pub fn unix_timestamp(&self) -> i64 {
@@ -372,7 +370,13 @@ mod tests {
     fn digest_requires_exactly_64_hex_chars() {
         assert!(Sha256Digest::from_hex(&"ab".repeat(32)).is_ok());
         assert!(Sha256Digest::from_hex(&"AB".repeat(32)).is_ok());
-        for bad in ["", "abcd", &"ab".repeat(31), &"zz".repeat(32), &"ab".repeat(33)] {
+        for bad in [
+            "",
+            "abcd",
+            &"ab".repeat(31),
+            &"zz".repeat(32),
+            &"ab".repeat(33),
+        ] {
             assert!(Sha256Digest::from_hex(bad).is_err(), "{bad:?}");
         }
         assert_eq!(digest().to_hex(), "ab".repeat(32));
@@ -417,7 +421,9 @@ mod tests {
             now,
         );
         assert!(ok.is_ok());
-        assert!(ConsentBasis::signed_agreement("", digest(), t("2026-07-01T00:00:00Z"), now).is_err());
+        assert!(
+            ConsentBasis::signed_agreement("", digest(), t("2026-07-01T00:00:00Z"), now).is_err()
+        );
         let future = ConsentBasis::signed_agreement(
             "agreements/x.pdf",
             digest(),
@@ -433,7 +439,8 @@ mod tests {
         let w = vec![Witness::new("Witness A").unwrap()];
         assert!(ConsentBasis::witnessed_verbal(w.clone(), "  ").is_err());
         assert!(Witness::new(" ").is_err());
-        let basis = ConsentBasis::witnessed_verbal(w, "operator verified both witnesses by ID").unwrap();
+        let basis =
+            ConsentBasis::witnessed_verbal(w, "operator verified both witnesses by ID").unwrap();
         let json = basis.audit_json();
         assert_eq!(json["kind"], "witnessed_verbal");
         assert_eq!(json["method"], "verbal");
@@ -451,8 +458,7 @@ mod tests {
         .unwrap();
         let op = ExportIdentity::local_operator("op-1").unwrap();
         for tier in [Tier::T0, Tier::T1, Tier::T3] {
-            let err =
-                FpicAuthorization::new(tier, basis.clone(), op.clone(), now).unwrap_err();
+            let err = FpicAuthorization::new(tier, basis.clone(), op.clone(), now).unwrap_err();
             assert!(matches!(err, ConsentSchemaError::NotT2(_)), "{tier:?}");
         }
         let auth = FpicAuthorization::new(Tier::T2, basis, op, now).unwrap();

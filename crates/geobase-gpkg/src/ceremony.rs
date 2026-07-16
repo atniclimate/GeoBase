@@ -194,9 +194,15 @@ pub enum ExportRefused {
     TierNeverExports { tier: Tier },
     /// The governing process declined: no/expired/revoked/superseded/
     /// wrong-scope/wrong-requester agreement, malformed evidence, or an
-    /// unauthenticated requester.
+    /// unauthenticated requester. `observed_at` is the node-clock instant
+    /// the decision used (design §2.5 — captured before matching, so it
+    /// exists on the refusal path too; the `export.refused` row carries
+    /// it). `None` only for refusals that precede the clock capture.
     #[error("export refused by the ceremony process: {reason}")]
-    Declined { reason: String },
+    Declined {
+        reason: String,
+        observed_at: Option<UtcInstant>,
+    },
 }
 
 /// All gate outcomes that are not an authorization.
@@ -223,6 +229,20 @@ pub trait CeremonyGate {
         &self,
         auth: &ExportAuthorization<'_>,
     ) -> Result<CeremonyRecord, CeremonyError>;
+
+    /// Revalidate a previously issued record at the PUBLICATION POINT
+    /// (design §10 export linearization: snapshot at authorization,
+    /// revalidate at the §6 step-3/4 boundary). A consent change that
+    /// committed between authorization and publication aborts THIS export;
+    /// one that commits after governs the next. The default is a no-op —
+    /// only a gate with a consent store has anything to revalidate.
+    fn revalidate(
+        &self,
+        _auth: &ExportAuthorization<'_>,
+        _record: &CeremonyRecord,
+    ) -> Result<(), CeremonyError> {
+        Ok(())
+    }
 }
 
 /// The development gate: authorizes T0–T2 with the provisional basis
@@ -250,8 +270,9 @@ impl CeremonyGate for ProvisionalDevGate {
         }
         // An implausible clock is an infrastructure failure even on the dev
         // gate — no record carries a knowingly-wrong instant.
-        let observed_at = UtcInstant::now()
-            .map_err(|e| CeremonyError::Infrastructure { reason: e.to_string() })?;
+        let observed_at = UtcInstant::now().map_err(|e| CeremonyError::Infrastructure {
+            reason: e.to_string(),
+        })?;
         Ok(CeremonyRecord {
             process: "provisional-dev".into(),
             basis: PROVISIONAL_BASIS.into(),
@@ -369,7 +390,10 @@ mod tests {
         assert_eq!(details["authorized_by"], "local-operator:test-operator");
         assert_eq!(details["purpose"], "unit test");
         assert_eq!(details["resolved_sources"][0]["id"], "rstep-fixture");
-        assert_eq!(details["resolved_source_hashes"][0]["sha256"], "ff".repeat(32));
+        assert_eq!(
+            details["resolved_source_hashes"][0]["sha256"],
+            "ff".repeat(32)
+        );
         // Free-text requester/conditions fields are GONE (breaking change,
         // design §2.4) — the old names must not reappear.
         assert!(details.get("requester").is_none());
