@@ -140,12 +140,24 @@ The chain, every step observable:
 | Render (0.2) | terrain displaced, not draped (pixel diff) | `engine-light/scripts/verify-render.mjs` | `render-gate.yml: render-gate` |
 | Node render (1.0) | same proof served by a booted node | same + `NODE_URL` | `render-gate.yml: node-render-gate` |
 | Layer (1.1) | two packages toggle+stack+round-trip (pixel diffs), URL boot state | `engine-light/scripts/verify-layers.mjs` | `render-gate.yml: layer-gate` |
-| RStep (1.3d) | paint → export → product-only shapefile (pyogrio) + ceremony record in ledger | **QUEUED — not yet built** | — |
+| RStep (1.3d) | paint → export → product-only shapefile (pyogrio) + ceremony record in ledger | `solo/rstep/scripts/verify-rstep.mjs` (+ `verify_rstep_oracle.py`, `examples/verify-export-audit.rs`) | `render-gate.yml: rstep-gate` |
+
+**RStep row (updated 2026-07-16, Phase A A3–A7): harness built —
+acceptance deferred to the sovereignty-core gate (M5/B8).** The 1.3d
+harness now exists and runs green locally + in CI (informational), but
+**against `ProvisionalDevGate`**, asserting the provisional basis
+verbatim. Per the acceptance-integrity rule (`docs/RELEASE-DEFINITION.md`,
+`CONTRIBUTING.md`), this green is engineering evidence, **not** Phase 1.3
+acceptance — `docs/ROADMAP.md` 1.3 stays not-accepted. Acceptance happens
+exactly once, at Phase B's exit (B8), against the sovereign gate, when the
+harness's `EXPECT_BASIS` flips to the sovereign process name. The ledger is
+read only through the trusted Rust verifier (`examples/verify-export-audit.rs`)
+so Phase B at-rest encryption of the T3 ledger does not break the gate.
 
 Fixtures: `scripts/make_geopack_fixtures.py` → committed synthetic sets
 in `data/fixtures/geopack/` (dem+parcels for 0.3; landcover+flood
-packages for 1.1; capacity+nogo for 1.3d still to add). Human-endorsed
-captures in `docs/verification/`.
+packages for 1.1; **capacity+nogo for 1.3d, added 2026-07-16**).
+Human-endorsed captures in `docs/verification/`.
 
 ## 9. TSDF spine (crosscutting)
 

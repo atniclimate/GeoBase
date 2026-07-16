@@ -292,3 +292,27 @@ accepted because the owner directed the build explicitly, everything executed
 is on every candidate 1.0 line's critical path (the RStep gate harness, the
 egress proofs, the cipher), and no acceptance or ratification act is
 simulated.
+
+## 2026-07-16 — Phase A A6: RStep is pack-driven (F7.4 honesty check, recorded)
+
+**Trigger:** `PLAN_1.0.md` A6 requires confirming RStep's renewable/NoGo
+logic is pack-driven config, not hardcoded, with the inspection recorded.
+
+**Finding (code inspection, `solo/rstep/src/main.ts` + `paint.ts`):** RStep
+has **no** hardcoded renewable/NoGo semantics and **no** fixture pack ids in
+app source. Layer stacking flows entirely from the node catalog
+(`client.packs()` → `stackRenderableLayers()` → `activePackIds`); the export
+sends `activePackIds` as source packs. "Renewable capacity" and "NoGo" are
+purely which packs the vault serves — the app is agnostic to them. Tier
+enforcement is the node's job (features/layers endpoints refuse T2/T3 before
+open), not an app-side branch; there is no `tier === "T…"` role logic in the
+app. This is the correct F7.4 posture.
+
+**Pin:** `solo/rstep/scripts/check-pack-driven.mjs` (wired into the
+`rstep-gate` CI job) fails if a future edit hardcodes a fixture pack id or a
+tier-keyed role branch into RStep source, or if `client.packs()` /
+`activePackIds` disappear. A full TS unit-test runner was deliberately not
+added for one pin (the TS workspaces run none today; adding one to the
+sovereignty-audited stack is unwarranted scope) — the empirical proof is in
+`verify-rstep.mjs`, which stacks two arbitrary fixture packs by
+name-agnostic discovery.
