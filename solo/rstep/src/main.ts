@@ -106,6 +106,7 @@ const ready: Promise<void> = new Promise((resolve, reject) => {
 declare global {
   interface Window {
     __GEOBASE_NODE__?: string;
+    __GEOBASE_EXPORT_TOKEN__?: string;
     __geobase: {
       map: maplibregl.Map;
       ready: Promise<void>;
@@ -137,8 +138,13 @@ void ready.catch((err: unknown) => {
 function nodeClient(): NodeClient | null {
   const node = params.get("node") ?? window.__GEOBASE_NODE__ ?? null;
   if (node === null || node === undefined || node.trim() === "") return null;
+  // Interim operator export token (Phase A guard): injected by the desktop
+  // shell (or a harness init script) as a window global — deliberately NOT
+  // a URL param, which would leak into history/logs. Absent → export
+  // attempts are refused by the node (403), read endpoints are unaffected.
+  const exportToken = window.__GEOBASE_EXPORT_TOKEN__ ?? undefined;
   try {
-    return new NodeClient(node);
+    return new NodeClient(node, exportToken !== undefined ? { exportToken } : undefined);
   } catch (err: unknown) {
     console.error(`[RStep] rejected node source '${node}'`, err);
     return null;

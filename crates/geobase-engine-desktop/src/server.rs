@@ -58,6 +58,9 @@ use tower_http::services::ServeDir;
 
 use crate::Node;
 
+/// Header carrying the interim operator export token (Phase A, A1).
+pub const EXPORT_TOKEN_HEADER: &str = "x-geobase-export-token";
+
 /// Server configuration. `port: 0` binds an ephemeral port (tests).
 #[derive(Debug, Clone, Default)]
 pub struct ServerConfig {
@@ -73,6 +76,17 @@ pub struct ServerConfig {
     /// refuses to write the T3 ledger at all (fail-closed — no plaintext
     /// sovereign data). Local dev/demo nodes opt into `DevPlaintextCipher`.
     pub at_rest: Option<Arc<dyn AtRestCipher>>,
+    /// **Interim operator export guard (Phase A, microtask A1 —
+    /// `PLAN_1.0.md`).** When `exports_dir` is set, `POST /api/export`
+    /// requires this operator-held token in the [`EXPORT_TOKEN_HEADER`]
+    /// header *before* the ceremony seam runs; a missing or wrong token is
+    /// refused 403 with an `export.refused` audit row. Exports enabled with
+    /// **no** token configured fail closed (503 — a misconfiguration, not an
+    /// authorization outcome). Provisional by design: real requester
+    /// authentication (per-app identity, Phase B item B5) replaces this
+    /// guard; it exists to close the unauthenticated-localhost-export dev
+    /// hole documented in `PLAN_1.0.md` § Current Position.
+    pub export_token: Option<String>,
 }
 
 /// A running server: bound address plus graceful shutdown.
@@ -106,6 +120,8 @@ struct ServerState {
     at_rest: Arc<dyn AtRestCipher>,
     /// `None` refuses `POST /api/export` — exporting is deliberate.
     exports_dir: Option<PathBuf>,
+    /// Interim operator export token (A1); checked before the ceremony seam.
+    export_token: Option<String>,
 }
 
 /// Resolve the at-rest cipher for a LOCAL dev/demo binary from the
@@ -142,6 +158,7 @@ pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
             .clone()
             .unwrap_or_else(|| Arc::new(FailClosedCipher)),
         exports_dir: config.exports_dir.clone(),
+        export_token: config.export_token.clone(),
     };
     let mut router = axum::Router::new()
         .route("/api/node", get(api_node))
@@ -212,7 +229,9 @@ async fn guard_localhost(req: Request, next: Next) -> Response {
         );
         preflight.headers_mut().insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("content-type"),
+            // The export token header (A1) must be preflight-approved or the
+            // browser will never send it on the RStep export POST.
+            HeaderValue::from_static("content-type, x-geobase-export-token"),
         );
         preflight
     } else {
@@ -405,7 +424,12 @@ struct ExportBodyFeature {
 /// fully audited before the response returns.
 async fn api_export(
     State(state): State<ServerState>,
-    body: axum::extract::Json<Value>,
+    headers: HeaderMap,
+    // Raw bytes, NOT `Json<Value>` (review H1): the JSON extractor would run
+    // before this handler and reject a malformed body with 400 *before* the
+    // token guard. Taking the body as bytes lets the guard authenticate
+    // first; parsing happens only after a valid token.
+    body: axum::body::Bytes,
 ) -> Response {
     use crate::export::{export_product, ExportError, ExportRequest, PaintedFeature, SourcePack};
 
@@ -416,7 +440,63 @@ async fn api_export(
             None,
         );
     };
-    let parsed: ExportBody = match serde_json::from_value(body.0) {
+    // Interim operator guard (A1): exports enabled without a NON-EMPTY
+    // configured token is a misconfiguration — fail closed before reading
+    // anything. An empty/whitespace token is treated as unconfigured so a
+    // `Some("")` config can never authorize an empty header (the invariant
+    // is enforced HERE, at the public server boundary, not only in binaries).
+    let Some(expected_token) = state
+        .export_token
+        .clone()
+        .filter(|token| !token.trim().is_empty())
+    else {
+        return status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"reason": "exports are enabled but no non-empty export token is \
+                              configured (interim operator guard, Phase A — set one at boot)"}),
+            None,
+        );
+    };
+    // Authenticate BEFORE parsing the body (A1 + review H1): a missing/wrong
+    // token is refused before any request-controlled content is read, so an
+    // unauthenticated caller cannot reach body parsing and cannot write
+    // attacker-controlled identity into the audit trail. The refusal row is
+    // therefore deliberately GENERIC — it records that an unauthenticated
+    // attempt happened, never a claimed product/requester it cannot trust.
+    let provided = headers
+        .get(EXPORT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if !provided.is_some_and(|candidate| token_matches(&expected_token, candidate)) {
+        return match crate::export::record_unauthenticated_refusal(
+            state.at_rest.as_ref(),
+            &exports_dir,
+        ) {
+            // Refusal recorded (or the tier did not require a cipher): 403.
+            Ok(()) => status_json(
+                StatusCode::FORBIDDEN,
+                json!({"reason": "export refused: missing or invalid export token \
+                                  (interim operator guard — Phase A, replaced by \
+                                  requester authentication in Phase B)"}),
+                None,
+            ),
+            // Fail-closed: the node cannot even record the refusal safely
+            // (no cipher for the T3 ledger). Say so honestly — do not claim
+            // the 403+audit contract was met when it was not.
+            Err(ExportError::Encryption(_)) => status_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"reason": "export refused (invalid token) AND the node cannot \
+                                  record the refusal: T3 ledger has no configured \
+                                  at-rest cipher (fail-closed)"}),
+                None,
+            ),
+            Err(err) => status_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({"reason": format!("export refusal could not be audited: {err}")}),
+                None,
+            ),
+        };
+    }
+    let parsed: ExportBody = match serde_json::from_slice(&body) {
         Ok(parsed) => parsed,
         Err(err) => {
             return status_json(
@@ -833,6 +913,27 @@ fn valid_identifier(identifier: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
+/// Constant-time token comparison. Length mismatch returns early — the
+/// token's length is not a secret; its bytes are.
+fn token_matches(expected: &str, provided: &str) -> bool {
+    let (e, p) = (expected.as_bytes(), provided.as_bytes());
+    e.len() == p.len() && e.iter().zip(p).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+}
+
+/// Generate a fresh operator export token: 32 hex chars from the OS CSPRNG.
+/// Binaries that enable exports without `GEOBASE_EXPORT_TOKEN` call this at
+/// boot and print the value once — operator-held, never persisted.
+pub fn generate_export_token() -> Result<String, getrandom::Error> {
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)?;
+    let mut token = String::with_capacity(32);
+    for byte in bytes {
+        let _ = write!(token, "{byte:02x}");
+    }
+    Ok(token)
+}
+
 fn status_json(status: StatusCode, body: Value, tier: Option<Tier>) -> Response {
     let mut response = JsonNoStore(body).into_response();
     *response.status_mut() = status;
@@ -1061,6 +1162,7 @@ mod tests {
                 // Dev cipher so the refusal itself can be audited; the point
                 // is the ceremony 403, not the ledger.
                 at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("a4-token".into()),
                 ..ServerConfig::default()
             },
         );
@@ -1077,6 +1179,9 @@ mod tests {
             .oneshot(
                 Request::post("/api/export")
                     .header("content-type", "application/json")
+                    // A valid token on purpose: the refusal under test is the
+                    // ceremony seam's T3 floor, not the A1 guard.
+                    .header(EXPORT_TOKEN_HEADER, "a4-token")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
             )
@@ -1631,6 +1736,188 @@ mod tests {
         );
     }
 
+    /// Build a router with exports enabled behind the A1 token guard plus a
+    /// T1 source pack, returning (app, exports_dir, source pack id).
+    fn export_guard_fixture(prefix: &str, token: Option<&str>) -> (axum::Router, PathBuf, String) {
+        let entry = create_pack(&format!("{prefix}-src.gpkg"), Some(Tier::T1));
+        let id = entry.id.clone();
+        let exports = temp_path(&format!("{prefix}-exports"));
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: token.map(String::from),
+                ..ServerConfig::default()
+            },
+        );
+        (app, exports, id)
+    }
+
+    fn export_body_for(id: &str) -> Value {
+        json!({
+            "product": "guard-check",
+            "source_packs": [id],
+            "requester": "guard-test",
+            "features": [{
+                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.001],[0.0,0.0]]]},
+                "score": 0.5
+            }]
+        })
+    }
+
+    /// [A1] Exports enabled with no token configured fail CLOSED (503,
+    /// misconfiguration) — never open, never a guessable 403 loop.
+    #[tokio::test]
+    async fn export_enabled_without_configured_token_fail_closes() {
+        let (app, exports, id) = export_guard_fixture("a1-noconf", None);
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_response(response).await;
+        assert!(
+            body["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no non-empty export token is configured"),
+            "reason names the misconfiguration: {body}"
+        );
+        assert!(
+            !exports.join("node-audit.gpkg").exists(),
+            "a misconfigured node audits nothing (nothing was refused, \
+             nothing was attempted — the route never opened)"
+        );
+    }
+
+    /// [A1] A missing token is refused 403 BEFORE the ceremony seam, with a
+    /// GENERIC `export.refused` audit row (no attacker-controlled identity),
+    /// and no product artifact of any kind on disk.
+    #[tokio::test]
+    async fn export_without_token_refused_with_generic_audit_row() {
+        let (app, exports, id) = export_guard_fixture("a1-missing", Some("secret-token"));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = json_response(response).await;
+        assert!(
+            body["reason"].as_str().unwrap().contains("export token"),
+            "refusal names the guard: {body}"
+        );
+        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
+        let trail = ledger.audit_trail().unwrap();
+        assert_eq!(trail.len(), 1, "exactly the refusal row");
+        assert_eq!(trail[0].action, "export.refused");
+        // The row must NOT echo the request's claimed product/requester
+        // (review H1): those are attacker-controlled and were never trusted.
+        assert_eq!(trail[0].dataset_id, "(unauthenticated export attempt)");
+        assert_ne!(
+            trail[0].actor, "guard-test",
+            "claimed requester must not be trusted"
+        );
+        assert!(
+            trail[0].details["reason"]
+                .as_str()
+                .unwrap()
+                .contains("ceremony seam was never consulted"),
+            "the row records that no ceremony ran: {}",
+            trail[0].details
+        );
+        for ext in ["shp", "shx", "dbf", "prj", "tsdf.json"] {
+            assert!(
+                !exports.join(format!("guard-check.{ext}")).exists(),
+                "a token-refused export must write no guard-check.{ext}"
+            );
+        }
+    }
+
+    /// [A1] A wrong token is refused identically to a missing one.
+    #[tokio::test]
+    async fn export_with_wrong_token_refused() {
+        let (app, _exports, id) = export_guard_fixture("a1-wrong", Some("secret-token"));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "wrong-token!")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// [A1 / review B3] An empty configured token is treated as UNCONFIGURED
+    /// at the server boundary — an empty header can never authorize. Fails
+    /// closed (503), even though the request supplies a matching empty token.
+    #[tokio::test]
+    async fn empty_configured_token_fail_closes_and_empty_header_never_authorizes() {
+        let (app, exports, id) = export_guard_fixture("a1-empty", Some("   "));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    // An attacker supplying the "matching" empty token.
+                    .header(EXPORT_TOKEN_HEADER, "")
+                    .body(Body::from(export_body_for(&id).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_response(response).await;
+        assert!(
+            body["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no non-empty export token"),
+            "an empty configured token is a misconfiguration, not an authorizer: {body}"
+        );
+        // Nothing was exported and no refusal row was written (the route
+        // never reached the guard — it fail-closed on misconfiguration).
+        assert!(!exports.join(format!("{id}.shp")).exists());
+    }
+
+    /// [A1 / review H1] Malformed JSON WITHOUT a token is refused by the guard
+    /// (403), never reaching the body parser — authentication precedes parsing.
+    #[tokio::test]
+    async fn malformed_body_without_token_is_refused_by_the_guard() {
+        let (app, _exports, _id) = export_guard_fixture("a1-malformed", Some("secret-token"));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{ this is not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 403 (guard), not 400 (parser): the token is checked first.
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn token_matches_is_exact() {
+        assert!(token_matches("abc123", "abc123"));
+        assert!(!token_matches("abc123", "abc124"));
+        assert!(!token_matches("abc123", "abc12"));
+        assert!(!token_matches("abc123", ""));
+    }
+
     #[tokio::test]
     async fn export_route_exports_t2_product_end_to_end() {
         // A T1 source pack with one polygon feature table.
@@ -1670,6 +1957,7 @@ mod tests {
                 // (stamped UNENCRYPTED-DEV). The fail-closed default is
                 // exercised separately by the egress gate (A7).
                 at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("route-token".into()),
                 ..ServerConfig::default()
             },
         );
@@ -1690,6 +1978,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "route-token")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
             )
@@ -1717,6 +2006,7 @@ mod tests {
             .oneshot(
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "route-token")
                     .body(Body::from(
                         json!({
                             "product": "route-site",
@@ -1760,6 +2050,12 @@ mod tests {
         assert_eq!(
             response.headers()[header::ACCESS_CONTROL_ALLOW_METHODS],
             "GET, POST"
+        );
+        // The A1 export token header must be preflight-approved or the
+        // browser never sends it and every RStep export dies as a 403.
+        assert_eq!(
+            response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS],
+            "content-type, x-geobase-export-token"
         );
 
         let foreign = axum::http::Request::builder()

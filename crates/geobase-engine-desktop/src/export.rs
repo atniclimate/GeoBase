@@ -162,6 +162,37 @@ pub enum ExportError {
     Io(#[from] std::io::Error),
 }
 
+/// Append a GENERIC `export.refused` audit row for a request that failed the
+/// interim operator token guard (Phase A, A1) — refused BEFORE the request
+/// body was parsed, so there is no trusted product/requester to record and
+/// none is invented (review H1: an unauthenticated caller must not be able
+/// to forge audit attribution). The row records only that an unauthenticated
+/// export attempt was refused, and that the ceremony seam was never
+/// consulted. Same fail-closed posture as every other T3 write: a node with
+/// no configured cipher returns `ExportError::Encryption`, which the caller
+/// surfaces honestly as a fail-closed status rather than a false 403+audit.
+pub fn record_unauthenticated_refusal(
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+) -> Result<(), ExportError> {
+    let (tsdf_version, tsdf_origin) = tsdf_info()?;
+    let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: "(unauthenticated export attempt)".into(),
+        action: "export.refused".into(),
+        actor: "(unverified — no valid export token)".into(),
+        tsdf_version,
+        tsdf_source_origin: tsdf_origin,
+        details: serde_json::json!({
+            "reason": "missing or invalid export token (interim operator \
+                       guard — Phase A A1; refused before the request body was \
+                       read, so no product/requester is attributed; the ceremony \
+                       seam was never consulted)",
+        }),
+    })?;
+    Ok(())
+}
+
 /// Export `request` as a T2 product shapefile into `exports_dir`,
 /// authorized through `gate`, verified per the module contract, audited
 /// in the ledger. On ANY failure nothing is released: partial outputs

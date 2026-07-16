@@ -135,16 +135,27 @@ export class NodeRequestError extends Error {
  * (http(s) on localhost/127.0.0.1) — the constructor throws otherwise;
  * the SDK never widens the egress stance. Implementation: 1.3c [C].
  */
+export interface NodeClientOptions {
+  /** Interim operator export token (Phase A guard, A1). Sent as
+   *  `x-geobase-export-token` on `POST /api/export` only. Provisional:
+   *  replaced by real requester authentication in Phase B (B5). Optional
+   *  second constructor argument — a non-breaking extension of the frozen
+   *  1.3c contract. */
+  exportToken?: string;
+}
+
 export class NodeClient {
   readonly baseUrl: string;
+  private readonly exportToken?: string;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options?: NodeClientOptions) {
     const parsed = new URL(baseUrl);
     const loopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !loopback) {
       throw new Error("node baseUrl must be an http(s) URL on localhost/127.0.0.1");
     }
     this.baseUrl = parsed.href.replace(/\/$/, "");
+    this.exportToken = options?.exportToken;
   }
 
   node(): Promise<NodeInfo> {
@@ -165,12 +176,18 @@ export class NodeClient {
     );
   }
 
-  /** POST /api/export. Refusals (403 ceremony, 400 invalid, 409 exists)
-   *  reject with `NodeRequestError` carrying the server's reason. */
+  /** POST /api/export. Refusals (403 ceremony/token, 400 invalid, 409
+   *  exists) reject with `NodeRequestError` carrying the server's reason.
+   *  When the client holds an export token it is passed explicitly here —
+   *  and only here; read endpoints never send it. */
   exportProduct(body: ExportRequestBody): Promise<ExportOutcome> {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.exportToken !== undefined) {
+      headers["x-geobase-export-token"] = this.exportToken;
+    }
     return this.requestObject<ExportOutcome>("/api/export", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
   }

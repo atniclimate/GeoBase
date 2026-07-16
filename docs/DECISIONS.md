@@ -292,3 +292,93 @@ accepted because the owner directed the build explicitly, everything executed
 is on every candidate 1.0 line's critical path (the RStep gate harness, the
 egress proofs, the cipher), and no acceptance or ratification act is
 simulated.
+
+## 2026-07-16 — Phase A A6: RStep is pack-driven (F7.4 honesty check, recorded)
+
+**Trigger:** `PLAN_1.0.md` A6 requires confirming RStep's renewable/NoGo
+logic is pack-driven config, not hardcoded, with the inspection recorded.
+
+**Finding (code inspection, `solo/rstep/src/main.ts` + `paint.ts`):** RStep
+has **no** hardcoded renewable/NoGo semantics and **no** fixture pack ids in
+app source. Layer stacking flows entirely from the node catalog
+(`client.packs()` → `stackRenderableLayers()` → `activePackIds`); the export
+sends `activePackIds` as source packs. "Renewable capacity" and "NoGo" are
+purely which packs the vault serves — the app is agnostic to them. Tier
+enforcement is the node's job (features/layers endpoints refuse T2/T3 before
+open), not an app-side branch; there is no `tier === "T…"` role logic in the
+app. This is the correct F7.4 posture.
+
+**Pin:** `solo/rstep/scripts/check-pack-driven.mjs` (wired into the
+`rstep-gate` CI job) fails if a future edit hardcodes a fixture pack id or a
+tier-keyed role branch into RStep source, or if `client.packs()` /
+`activePackIds` disappear. A full TS unit-test runner was deliberately not
+added for one pin (the TS workspaces run none today; adding one to the
+sovereignty-audited stack is unwarranted scope) — the empirical proof is in
+`verify-rstep.mjs`, which stacks two arbitrary fixture packs by
+name-agnostic discovery.
+
+## 2026-07-16 — DG-2 cipher spike (B1) — recommendation recorded; DG-2 stays owner-open
+
+**Trigger:** `PLAN_1.0.md` B1 / DG-2, the scheduled condition-precedent spike
+for the T3 at-rest cipher. **This entry records the spike's finding and a
+recommended default; it does NOT resolve DG-2.** DG-2's owner is Patrick
+(`PLAN_1.0.md` Decision Gates); the choice, the dependency-graph commitment it
+implies, and the live implementation (B4) are reserved to him. Executed
+overnight per the 2026-07-16 directive, which explicitly does not exercise
+owner-reserved gates.
+
+**Scope studied:** the T3 export ledger (`exports_dir/node-audit.gpkg`) is the
+only T3 artifact a shipped node writes today. The seam
+(`crates/geobase-gpkg/src/cipher.rs`) is authorization-only by design — it
+gates *whether* a T3 write may proceed (fail-closed default), and deliberately
+carries **no `Encrypted` protection variant** until a real cipher applies
+encryption (the doc's own "no false assurance" rule). So B4 is genuinely two
+pieces: (i) a crypto primitive, and (ii) extending the seam with an
+open/seal capability + rewiring the ledger write path through it. This spike
+addresses (i)'s choice and sizes (ii).
+
+**Candidate matrix.**
+
+| Candidate | Dependency posture | Fit | Verdict |
+|---|---|---|---|
+| **Pure-Rust XChaCha20-Poly1305 file envelope** (RustCrypto `chacha20poly1305` + `argon2` KDF + `zeroize`) over the whole serialized ledger DB | Pure Rust, no C, wheels-free; ~4 well-audited RustCrypto crates | Ledger is small (a few KB of audit rows); decrypt→in-memory SQLite→append→serialize→encrypt→atomic-replace is cheap and correct for this size. AEAD gives authenticated, non-malleable, tamper-evident bytes. | **Recommended default** |
+| **`age` X25519 recipient envelope** | Pure Rust but crate pre-1.0/beta; specified streaming format | Good, and a specified format we don't own — but a heavier dependency and a recipient model richer than a single-node ledger needs. | Viable alternative; hold unless a multi-recipient story appears |
+| **SQLCipher** (page-level, C) | System/bundled C dependency | Contradicts the tracked pure-Rust product decision (2026-07-06); pulls C into the Tauri bundle we deliberately avoided for GDAL. | Rejected unless an escalation-ladder entry overrides the pure-Rust posture |
+| **Encrypted SQLite VFS** (`sqlite-vfs`) | Pure Rust but the crate self-describes as prototype (no WAL, unreviewed `unsafe`, Unix-only tests) | Right *eventual* random-access layer for large T3 GeoPackages, wrong maturity now. | Deferred; revisit for vault-wide T3 (below) |
+
+**Recommended default (pending owner confirmation of DG-2):** pure-Rust
+XChaCha20-Poly1305 file envelope for the T3 ledger. Per-artifact random 32-byte
+DEK; DEK wrapped by a per-node key/identity; node key derived from a
+passphrase via **Argon2id** or supplied as a 32-byte keyfile held outside the
+vault; key material in `zeroize`-on-drop buffers; 24-byte random nonce per
+seal; versioned envelope header authenticated as AEAD associated data.
+
+**Lost-key policy:** already ratified — **deliberately unrecoverable** (2026-07-07,
+Patrick; `cipher.rs` module docs). No escrow, no master key, no recovery
+recipient. The spike changes nothing here; it only picks a primitive that
+*honors* it (losing the passphrase/keyfile = cryptographically destroyed T3,
+by construction).
+
+**Sizing (ii), the honest cost center:** the ledger rewire needs GeoPackage to
+open from and serialize back to an in-memory SQLite image (rusqlite 0.40 has
+`serialize`/`deserialize`), plus a commit-on-close discipline so every
+`append_audit` re-seals. `examples/verify-export-audit.rs` (the trusted read
+path built in A4) already isolates ledger reads behind the product crate, so
+that rewire does **not** change the RStep gate's command line — the reason A4
+built it that way.
+
+**Recorded gap for Patrick's Phase 1.2 (not fixed tonight — Codex-flagged,
+verified in code):** the ledger is not the only place T3 can reach disk.
+`ingest()` (`crates/geobase-ingestor/src/lib.rs:226,261`) and `package()`
+(`crates/geobase-ingestor/src/package.rs:243,247`) write **plaintext staging
+GPKGs** for default-T3 / explicit-T3 inputs, bypassing the `AtRestCipher` seam
+entirely. Vault-wide T3-at-rest (the large-GeoPackage case the VFS candidate
+targets) is the durable Phase 1.2 scope; the fail-closed *ledger* is the
+bounded first step. Both belong to the owner's sovereign-core work (Phase B
+B4), sequenced after DG-2 is confirmed.
+
+**Strongest surviving objection:** recommending a primitive without committing
+the dependency and the code could read as deciding DG-2 by the back door.
+Mitigated by leaving the deps unadded and DG-2 explicitly owner-open: this is
+decision *support*, the artifact B4 consumes once Patrick confirms — no
+`chacha20poly1305`/`argon2` entered `Cargo.toml` tonight.

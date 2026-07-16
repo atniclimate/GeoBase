@@ -1,0 +1,10 @@
+[package]
+id = "rstep-nogo-2026"
+name = "Synthetic NoGo Exclusion Zones"
+tier = "T1"
+basis = "synthetic provenance - generated for the RStep 1.3d gate"
+
+[[inputs]]
+kind = "vector"
+path = "nogo_small.shp"
+table = "nogo"

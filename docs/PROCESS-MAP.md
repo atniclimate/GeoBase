@@ -105,6 +105,12 @@ most restrictive (`geobase-core::LayerPackage::effective_tier` rule via
 The chain, every step observable:
 1. `POST /api/export` (server.rs) — first mutating endpoint: 503
    without `exports_dir`, 404 unknown source pack, 400 invalid.
+   **Interim operator guard (Phase A, A1):** an operator-held token
+   (`x-geobase-export-token`; `GEOBASE_EXPORT_TOKEN` or boot-generated)
+   is required *before* the ceremony seam runs — missing/wrong → 403 +
+   `export.refused` audit row; exports enabled with no token → 503
+   (fail-closed misconfiguration). Provisional by design: replaced by
+   real requester authentication in Phase B (B5).
 2. **CeremonyGate seam** (`crates/geobase-gpkg/src/ceremony.rs`):
    every export authorized BEFORE any file is written.
    `ProvisionalDevGate` (the only impl until Phase 1.2) refuses T3
@@ -134,12 +140,29 @@ The chain, every step observable:
 | Render (0.2) | terrain displaced, not draped (pixel diff) | `engine-light/scripts/verify-render.mjs` | `render-gate.yml: render-gate` |
 | Node render (1.0) | same proof served by a booted node | same + `NODE_URL` | `render-gate.yml: node-render-gate` |
 | Layer (1.1) | two packages toggle+stack+round-trip (pixel diffs), URL boot state | `engine-light/scripts/verify-layers.mjs` | `render-gate.yml: layer-gate` |
-| RStep (1.3d) | paint → export → product-only shapefile (pyogrio) + ceremony record in ledger | **QUEUED — not yet built** | — |
+| RStep (1.3d) | paint → export → product-only shapefile (pyogrio) + ceremony record in ledger | `solo/rstep/scripts/verify-rstep.mjs` (+ `verify_rstep_oracle.py`, `examples/verify-export-audit.rs`) | `render-gate.yml: rstep-gate` |
+
+**RStep row (updated 2026-07-16, Phase A A3–A7): harness built —
+acceptance deferred to the sovereignty-core gate (M5/B8).** The 1.3d
+harness now exists and runs **green locally**; the `rstep-gate` CI job is
+committed and INFORMATIONAL (first `main` run pending — nothing was pushed
+in the overnight build). It runs **against `ProvisionalDevGate`**, asserting
+the provisional basis verbatim. Per the acceptance-integrity rule
+(`docs/RELEASE-DEFINITION.md`, `CONTRIBUTING.md`), this green is engineering
+evidence, **not** Phase 1.3 acceptance — `docs/ROADMAP.md` 1.3 stays
+not-accepted. Acceptance happens exactly once, at Phase B's exit (B8),
+against the sovereign gate, when the harness's `EXPECT_BASIS` flips to the
+sovereign process name. The ledger is read only through the trusted,
+assertion-only Rust verifier (`examples/verify-export-audit.rs`) which emits
+no row contents; that verifier is the right *place* for Phase B's at-rest
+decryption to live (a node opens its own T3 ledger), but it does **not**
+decrypt anything today — an encrypted ledger will require a cipher/key there
+(Phase B, DG-2).
 
 Fixtures: `scripts/make_geopack_fixtures.py` → committed synthetic sets
 in `data/fixtures/geopack/` (dem+parcels for 0.3; landcover+flood
-packages for 1.1; capacity+nogo for 1.3d still to add). Human-endorsed
-captures in `docs/verification/`.
+packages for 1.1; **capacity+nogo for 1.3d, added 2026-07-16**).
+Human-endorsed captures in `docs/verification/`.
 
 ## 9. TSDF spine (crosscutting)
 
