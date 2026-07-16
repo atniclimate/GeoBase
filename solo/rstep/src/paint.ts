@@ -55,7 +55,18 @@ export class HandRolledPaintTool implements PaintTool {
     this.score = options.score;
     this.canvas = map.getCanvas();
 
-    this.addSourcesAndLayers();
+    // Sources/layers can only be added once the style is loaded. In a
+    // fast-WebGL browser the inline style is ready by construction time, but
+    // under headless SwiftShader (and any slow GL init) it is not — adding
+    // then throws "Style is not done loading". Defer to the load event when
+    // needed; syncPaint/syncDraft already no-op until the sources exist.
+    if (this.map.isStyleLoaded()) {
+      this.addSourcesAndLayers();
+    } else {
+      this.map.once("load", () => {
+        if (!this.disposed) this.addSourcesAndLayers();
+      });
+    }
     this.map.on("click", this.onMapClick);
     this.map.on("click", FILL_LAYER, this.onPaintClick);
     this.map.on("mousemove", this.onMouseMove);
