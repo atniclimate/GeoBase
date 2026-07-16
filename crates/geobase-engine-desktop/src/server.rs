@@ -49,6 +49,8 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use geobase_gpkg::cipher::{AtRestCipher, DevPlaintextCipher, FailClosedCipher};
+use geobase_gpkg::consent::ExportIdentity;
+use geobase_gpkg::consent_gate::RecordedConsentGate;
 use geobase_gpkg::GeoPackage;
 use geobase_tsdf::Tier;
 use serde_json::{json, Value};
@@ -56,6 +58,7 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 
+use crate::session::{SessionRegistry, SESSION_HEADER};
 use crate::Node;
 
 /// Header carrying the interim operator export token (Phase A, A1).
@@ -130,12 +133,17 @@ impl ServerHandle {
 pub enum ServerError {
     #[error("bind failed on 127.0.0.1:{port}: {source}")]
     Bind { port: u16, source: std::io::Error },
+    /// Startup publication recovery failed (design §6 step 6) — the node
+    /// must not serve with unresolved in-flight publications.
+    #[error("publication recovery failed: {detail} — refusing to serve with unresolved in-flight publications (fail-closed)")]
+    Recovery { detail: String },
 }
 
 #[derive(Clone)]
 struct ServerState {
     node: Arc<Node>,
-    /// The export-authorization seam (Phase 1.2 swaps the implementation).
+    /// The export-authorization seam — the SOVEREIGN gate since B3
+    /// (`RecordedConsentGate`); composed in `router()`, nowhere else.
     gate: Arc<dyn geobase_gpkg::ceremony::CeremonyGate + Send + Sync>,
     /// The at-rest encryption seam for T3 writes (fail-closed by default).
     at_rest: Arc<dyn AtRestCipher>,
@@ -143,6 +151,35 @@ struct ServerState {
     exports_dir: Option<PathBuf>,
     /// Interim operator export token (A1); checked before the ceremony seam.
     export_token: Option<String>,
+    /// Node-witnessed export sessions (B3, design §4): the ONLY producer
+    /// of an export's source set.
+    sessions: Arc<SessionRegistry>,
+}
+
+/// The authenticated requester identity for an export authorized through
+/// the interim A1 operator token. B5 replaces this with the enrolled
+/// OS-keychain credential; until then the enrollment reference names the
+/// interim mechanism honestly.
+fn interim_operator_identity() -> ExportIdentity {
+    ExportIdentity::local_operator("a1-interim-export-token")
+        .expect("static non-empty enrollment ref")
+}
+
+/// The gate composed when exports are DISABLED (`exports_dir: None`).
+/// Unreachable through the route (it 503s first); if ever reached, it
+/// fails as infrastructure, never as a silent authorization.
+#[derive(Debug)]
+struct ExportsNotConfiguredGate;
+
+impl geobase_gpkg::ceremony::CeremonyGate for ExportsNotConfiguredGate {
+    fn authorize_export(
+        &self,
+        _auth: &geobase_gpkg::ceremony::ExportAuthorization<'_>,
+    ) -> Result<geobase_gpkg::ceremony::CeremonyRecord, geobase_gpkg::ceremony::CeremonyError> {
+        Err(geobase_gpkg::ceremony::CeremonyError::Infrastructure {
+            reason: "exports_dir is not configured for this node".into(),
+        })
+    }
 }
 
 /// Resolve the at-rest cipher for a LOCAL dev/demo binary from the
@@ -166,20 +203,34 @@ pub fn dev_unencrypted_cipher_if_opted_in() -> Option<Arc<dyn AtRestCipher>> {
 
 /// Build the router for `node` (pure; unit-testable via tower `oneshot`).
 pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
+    // Fail-closed by default: absent an explicitly configured cipher,
+    // the node refuses to write T3 at rest (no plaintext ledger).
+    let at_rest: Arc<dyn AtRestCipher> = config
+        .at_rest
+        .clone()
+        .unwrap_or_else(|| Arc::new(FailClosedCipher));
+    // THE single gate composition point (docs/CEREMONY-GATE.md,
+    // docs/CEREMONY-DESIGN.md §12): since B3 the composed gate is the
+    // SOVEREIGN RecordedConsentGate — ProvisionalDevGate is no longer
+    // reachable from any release-build composition. The consent store
+    // lives beside the export ledger in exports_dir.
+    let gate: Arc<dyn geobase_gpkg::ceremony::CeremonyGate + Send + Sync> =
+        match &config.exports_dir {
+            Some(dir) => Arc::new(RecordedConsentGate::new(
+                dir.clone(),
+                &node.tsdf_version,
+                &node.tsdf_origin,
+                at_rest.clone(),
+            )),
+            None => Arc::new(ExportsNotConfiguredGate),
+        };
     let state = ServerState {
         node,
-        // The Phase 1.2 swap point (docs/CEREMONY-GATE.md): the sovereign
-        // CeremonyGate implementation replaces the provisional one HERE,
-        // nowhere else.
-        gate: Arc::new(geobase_gpkg::ceremony::ProvisionalDevGate),
-        // Fail-closed by default: absent an explicitly configured cipher,
-        // the node refuses to write T3 at rest (no plaintext ledger).
-        at_rest: config
-            .at_rest
-            .clone()
-            .unwrap_or_else(|| Arc::new(FailClosedCipher)),
+        gate,
+        at_rest,
         exports_dir: config.exports_dir.clone(),
         export_token: config.export_token.clone(),
+        sessions: Arc::new(SessionRegistry::default()),
     };
     let mut router = axum::Router::new()
         .route("/api/node", get(api_node))
@@ -189,6 +240,7 @@ pub fn router(node: Arc<Node>, config: &ServerConfig) -> axum::Router {
             "/api/packs/{id}/tables/{table}/features",
             get(api_pack_table_features),
         )
+        .route("/api/sessions", axum::routing::post(api_sessions))
         .route("/api/export", axum::routing::post(api_export))
         .with_state(state);
 
@@ -252,7 +304,7 @@ async fn guard_localhost(req: Request, next: Next) -> Response {
             header::ACCESS_CONTROL_ALLOW_HEADERS,
             // The export token header (A1) must be preflight-approved or the
             // browser will never send it on the RStep export POST.
-            HeaderValue::from_static("content-type, x-geobase-export-token"),
+            HeaderValue::from_static("content-type, x-geobase-export-token, x-geobase-session"),
         );
         preflight
     } else {
@@ -310,6 +362,25 @@ fn is_loopback_origin(origin: &str) -> bool {
 
 /// Bind 127.0.0.1 (never anything else) and serve until `stop()`.
 pub async fn serve(node: Arc<Node>, config: ServerConfig) -> Result<ServerHandle, ServerError> {
+    // Publication recovery BEFORE serving (design §6 step 6): every
+    // prepared-but-unfinalized publication finalizes or aborts,
+    // truthfully, before the node answers a single request. A node that
+    // cannot resolve its own in-flight publications must not serve —
+    // fail-closed.
+    if let Some(exports_dir) = &config.exports_dir {
+        let cipher: Arc<dyn AtRestCipher> = config
+            .at_rest
+            .clone()
+            .unwrap_or_else(|| Arc::new(FailClosedCipher));
+        let actions = crate::export::recover_publications(cipher.as_ref(), exports_dir).map_err(
+            |source| ServerError::Recovery {
+                detail: source.to_string(),
+            },
+        )?;
+        for action in &actions {
+            eprintln!("[geobase] publication recovery: {action:?}");
+        }
+    }
     let listener = TcpListener::bind(("127.0.0.1", config.port))
         .await
         .map_err(|source| ServerError::Bind {
@@ -379,7 +450,42 @@ async fn no_terrain_tiles() -> impl IntoResponse {
     )
 }
 
-async fn api_pack_layers(State(state): State<ServerState>, Path(id): Path<String>) -> Response {
+/// Issue a node-witnessed export session (B3, design §4). The id is the
+/// only handle the SDK needs; every pack subsequently served with the
+/// session header is accumulated by the node.
+async fn api_sessions(State(state): State<ServerState>) -> Response {
+    match state.sessions.issue() {
+        Ok(id) => status_json(StatusCode::OK, json!({"session": id}), None),
+        Err(err) => status_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"reason": format!("session id generation failed: {err}")}),
+            None,
+        ),
+    }
+}
+
+/// Witness a successfully-served pack into the request's session, if the
+/// session header accompanies it. An unknown session is a loud 400 — an
+/// app that believes it is accumulating provenance must not silently
+/// accumulate nothing. Returns an error response to surface, or `None` to
+/// proceed with serving.
+fn witness_serve(state: &ServerState, headers: &HeaderMap, pack_id: &str) -> Option<Response> {
+    let session_id = headers.get(SESSION_HEADER)?.to_str().ok()?;
+    match state.sessions.witness(session_id, pack_id) {
+        Ok(()) => None,
+        Err(err) => Some(status_json(
+            StatusCode::BAD_REQUEST,
+            json!({"reason": err.to_string()}),
+            None,
+        )),
+    }
+}
+
+async fn api_pack_layers(
+    State(state): State<ServerState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     let Some(entry) = state.node.catalog.iter().find(|entry| entry.id == id) else {
         return status_json(
             StatusCode::NOT_FOUND,
@@ -398,6 +504,11 @@ async fn api_pack_layers(State(state): State<ServerState>, Path(id): Path<String
             }),
             Some(tier),
         );
+    }
+    // The node witnesses the serve (design §4) — a refused pack was never
+    // served and is deliberately NOT witnessed.
+    if let Some(refused) = witness_serve(&state, &headers, &entry.id) {
+        return refused;
     }
 
     match layer_metadata(&entry.path, &entry.id, tier, &entry.tables) {
@@ -419,13 +530,17 @@ async fn api_pack_layers(State(state): State<ServerState>, Path(id): Path<String
 }
 
 /// `POST /api/export` request body (deny_unknown_fields: a mutating
-/// endpoint never guesses what a stray field meant).
+/// endpoint never guesses what a stray field meant — and the pre-B3
+/// `source_packs`/`requester` fields are REFUSED, not ignored: the old
+/// body shape fails loudly instead of silently losing its claims).
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExportBody {
     product: String,
-    source_packs: Vec<String>,
-    requester: String,
+    /// The node-witnessed export session (B3, design §4). The source set
+    /// is the node's record for this session — the request can neither
+    /// add nor subtract.
+    session: String,
     #[serde(default)]
     purpose: Option<String>,
     features: Vec<ExportBodyFeature>,
@@ -528,22 +643,61 @@ async fn api_export(
         }
     };
 
-    // Resolve every source pack from the catalog BEFORE anything else.
-    let mut sources = Vec::with_capacity(parsed.source_packs.len());
-    for pack_id in &parsed.source_packs {
-        let Some(entry) = state.node.catalog.iter().find(|entry| &entry.id == pack_id) else {
-            return status_json(
-                StatusCode::NOT_FOUND,
-                json!({"reason": format!("unknown source pack '{pack_id}'")}),
-                None,
+    let requester = interim_operator_identity();
+
+    // B3 (design §4): the source set is the NODE'S session record — every
+    // pack served into the named session, period. No valid session →
+    // refuse, with a refusal row. The request cannot add or subtract.
+    let witnessed_ids = match state.sessions.source_set(&parsed.session) {
+        Ok(ids) => ids,
+        Err(err) => {
+            let reason = format!(
+                "export refused: {err} (the source set is the node's own session \
+                 record — an export without a witnessed session has no provenance)"
             );
-        };
-        sources.push(SourcePack {
-            id: entry.id.clone(),
-            path: entry.path.clone(),
-            tier: entry.tier,
-        });
-    }
+            return match crate::export::record_declined_refusal(
+                state.at_rest.as_ref(),
+                &exports_dir,
+                &parsed.product,
+                &requester,
+                &reason,
+            ) {
+                Ok(()) => status_json(StatusCode::FORBIDDEN, json!({"reason": reason}), None),
+                Err(ExportError::Encryption(_)) => status_json(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"reason": "export refused (invalid session) AND the node cannot \
+                                      record the refusal: T3 ledger has no configured \
+                                      at-rest cipher (fail-closed)"}),
+                    None,
+                ),
+                Err(err) => status_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"reason": format!("export refusal could not be audited: {err}")}),
+                    None,
+                ),
+            };
+        }
+    };
+    // Re-resolve effective tiers against the catalog AT EXPORT TIME
+    // (design §5.1 step 1): a witnessed pack that no longer resolves is
+    // T3 — the floor refuses it downstream.
+    let sources: Vec<SourcePack> = witnessed_ids
+        .iter()
+        .map(
+            |pack_id| match state.node.catalog.iter().find(|entry| &entry.id == pack_id) {
+                Some(entry) => SourcePack {
+                    id: entry.id.clone(),
+                    path: Some(entry.path.clone()),
+                    tier: entry.tier,
+                },
+                None => SourcePack {
+                    id: pack_id.clone(),
+                    path: None,
+                    tier: Tier::T3,
+                },
+            },
+        )
+        .collect();
 
     let mut features = Vec::with_capacity(parsed.features.len());
     for (index, feature) in parsed.features.iter().enumerate() {
@@ -564,8 +718,6 @@ async fn api_export(
 
     let request = ExportRequest {
         product: parsed.product,
-        source_packs: parsed.source_packs,
-        requester: parsed.requester,
         purpose: parsed.purpose,
         features,
     };
@@ -579,6 +731,7 @@ async fn api_export(
             &exports_dir,
             &request,
             &sources,
+            &requester,
         )
     })
     .await;
@@ -624,6 +777,7 @@ async fn api_export(
                         "process": done.ceremony.process,
                         "basis": done.ceremony.basis,
                     },
+                    "publication_id": done.publication_id,
                     "audit_ids": done.audit_ids,
                 }),
                 Some(done.tier),
@@ -631,13 +785,17 @@ async fn api_export(
         }
         Err(err) => {
             let status = match &err {
+                // Governance denial (design §5.3): 403 + refusal row.
                 ExportError::Refused(_) => StatusCode::FORBIDDEN,
                 ExportError::Invalid(_) => StatusCode::BAD_REQUEST,
                 ExportError::Exists(_) => StatusCode::CONFLICT,
-                // Fail-closed: the node is not provisioned to store the T3
-                // export ledger safely — a service-unavailable condition,
-                // not a client error.
-                ExportError::Encryption(_) => StatusCode::SERVICE_UNAVAILABLE,
+                // Infrastructure failure (design §5.3): 503, never
+                // attributed to the sovereign ceremony. Fail-closed
+                // encryption is the same class: the node is not
+                // provisioned to store the T3 ledger safely.
+                ExportError::Infrastructure(_) | ExportError::Encryption(_) => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
             status_json(status, json!({"reason": err.to_string()}), None)
@@ -705,6 +863,7 @@ fn painted_geometry_from_geojson(value: &Value) -> Result<crate::export::Painted
 async fn api_pack_table_features(
     State(state): State<ServerState>,
     Path((id, table)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(entry) = state.node.catalog.iter().find(|entry| entry.id == id) else {
         return status_json(
@@ -745,6 +904,11 @@ async fn api_pack_table_features(
             json!({"reason": "invalid table identifier"}),
             Some(tier),
         );
+    }
+    // Witness the serve into the session, if one accompanies the request
+    // (design §4) — feature data is exactly what a product derives from.
+    if let Some(refused) = witness_serve(&state, &headers, &entry.id) {
+        return refused;
     }
 
     match feature_collection(entry.path.clone(), &table) {
@@ -1169,10 +1333,18 @@ mod tests {
         assert!(!text.contains(T3_SENTINEL), "but no feature data may leak");
     }
 
-    /// [EGRESS-GATE A4] Exporting a product derived from a T3 source is
-    /// refused by the ceremony seam (403) — T3 can never be an export source.
+    /// [EGRESS-GATE A4, B3 rework] The T3-omission bypass is closed
+    /// STRUCTURALLY: the request can no longer declare source packs at
+    /// all. (a) The pre-B3 body shape (`source_packs`/`requester`) is
+    /// refused 400 by `deny_unknown_fields` — the bypass field is gone,
+    /// not deprecated. (b) A session that witnessed nothing has an empty
+    /// node-derived source set, which resolves to T3 and hits the floor:
+    /// 403 with a refusal row, no product bytes. (c) A T3 pack can never
+    /// be served (A1/A2), so it can never enter a session's source set —
+    /// there is no request shape that reaches the ceremony with an
+    /// unwitnessed T3 source omitted.
     #[tokio::test]
-    async fn egress_gate_a4_export_from_t3_source_refused() {
+    async fn egress_gate_a4_export_source_set_is_node_witnessed_only() {
         let entry = t3_sentinel_pack("a4-t3.gpkg");
         let id = entry.id.clone();
         let exports = temp_path("a4-exports");
@@ -1180,14 +1352,14 @@ mod tests {
             test_node(vec![entry]),
             &ServerConfig {
                 exports_dir: Some(exports.clone()),
-                // Dev cipher so the refusal itself can be audited; the point
-                // is the ceremony 403, not the ledger.
                 at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
                 export_token: Some("a4-token".into()),
                 ..ServerConfig::default()
             },
         );
-        let body = json!({
+        // (a) The pre-B3 body shape is refused loudly — a caller cannot
+        // even CLAIM a source set anymore.
+        let old_shape = json!({
             "product": "steal",
             "source_packs": [id],
             "requester": "attacker",
@@ -1197,11 +1369,52 @@ mod tests {
             }]
         });
         let response = app
+            .clone()
             .oneshot(
                 Request::post("/api/export")
                     .header("content-type", "application/json")
-                    // A valid token on purpose: the refusal under test is the
-                    // ceremony seam's T3 floor, not the A1 guard.
+                    .header(EXPORT_TOKEN_HEADER, "a4-token")
+                    .body(Body::from(old_shape.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "declared source packs must be refused as an unknown field"
+        );
+
+        // (b) A session that served nothing: empty node-witnessed source
+        // set → T3 floor → 403.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let session = json_response(response).await["session"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let body = json!({
+            "product": "steal",
+            "session": session,
+            "features": [{
+                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
+                "score": 1.0
+            }]
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/export")
+                    .header("content-type", "application/json")
                     .header(EXPORT_TOKEN_HEADER, "a4-token")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
@@ -1209,25 +1422,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        // ...and NO product artifact was written before/alongside the refusal.
-        for ext in ["shp", "shx", "dbf", "prj", "tsdf.json"] {
-            assert!(
-                !exports.join(format!("steal.{ext}")).exists(),
-                "a refused T3-source export must write no steal.{ext}"
-            );
-        }
+        let reason = json_response(response).await["reason"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(reason.contains("never leaves the node"), "{reason}");
+
+        // (c) An unknown session is refused outright, with a refusal row.
+        let body = json!({
+            "product": "steal2",
+            "session": "forged-session-id",
+            "features": [{
+                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
+                "score": 1.0
+            }]
+        });
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header("content-type", "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "a4-token")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // ...and NO product artifact of any kind was written.
+        assert!(!exports.join("steal").exists());
+        assert!(!exports.join("steal2").exists());
+        // The refusals were audited.
+        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
+        let refused: Vec<_> = ledger
+            .audit_trail()
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.action == "export.refused")
+            .collect();
+        assert_eq!(refused.len(), 2, "floor refusal + unknown-session refusal");
     }
 
-    /// [EGRESS-GATE A5] The T3 export ledger is never catalogued — enforced by
-    /// name, not merely by living in a separate directory. Even placed INSIDE
-    /// the vault (a misconfiguration), the reserved `node-audit.gpkg` is
-    /// skipped by the scanner.
+    /// [EGRESS-GATE A5] The T3 export ledger AND the T3 consent store are
+    /// never catalogued — enforced by name, not merely by living in a
+    /// separate directory. Even placed INSIDE the vault (a
+    /// misconfiguration), both reserved names are skipped by the scanner.
     #[test]
-    fn egress_gate_a5_reserved_ledger_never_catalogued_even_inside_vault() {
+    fn egress_gate_a5_reserved_artifacts_never_catalogued_even_inside_vault() {
         let vault = temp_path("a5-vault");
         std::fs::create_dir_all(&vault).unwrap();
         drop(GeoPackage::create(&vault.join("public.gpkg")).unwrap());
-        // Adversarial misconfiguration: the T3 ledger sitting in the vault.
+        // Adversarial misconfiguration: both reserved T3 artifacts sitting
+        // in the vault.
         let ledger = GeoPackage::create(&vault.join(crate::vault::RESERVED_LEDGER_NAME)).unwrap();
         ledger
             .write_tsdf_tag(&TsdfTag {
@@ -1240,12 +1486,23 @@ mod tests {
             })
             .unwrap();
         drop(ledger);
+        drop(
+            geobase_gpkg::consent_store::ConsentStore::open_or_create(
+                &vault,
+                "0.9.4",
+                "vendored:embedded",
+                &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            )
+            .unwrap(),
+        );
         let catalog = crate::vault::scan(&vault).unwrap();
         assert_eq!(catalog.len(), 1, "only the public pack is catalogued");
         assert_eq!(catalog[0].id, "public");
         assert!(
-            catalog.iter().all(|e| e.id != "node-audit"),
-            "the reserved T3 ledger must never be catalogued, even inside the vault"
+            catalog
+                .iter()
+                .all(|e| e.id != "node-audit" && e.id != "node-consent"),
+            "the reserved T3 artifacts must never be catalogued, even inside the vault"
         );
     }
 
@@ -2027,6 +2284,46 @@ mod tests {
             }],
         };
         let exports_dir = temp_path("exports-route");
+        // B3: the sovereign gate is composed, so the export requires a
+        // RECORDED agreement covering the witnessed source set, bound to
+        // the authenticated (interim A1) operator identity. Seed the
+        // consent store the way the local operator would.
+        {
+            use geobase_gpkg::consent::{Conditions, ConsentBasis, Sha256Digest, UtcInstant};
+            use geobase_gpkg::consent_store::{AgreementKind, AgreementRecord, ConsentStore};
+            let store = ConsentStore::open_or_create(
+                &exports_dir,
+                "0.9.4",
+                "vendored:embedded",
+                &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            )
+            .unwrap();
+            let now = UtcInstant::now().unwrap();
+            let evidence = ConsentBasis::signed_agreement(
+                "agreements/route-test.pdf",
+                Sha256Digest::from_hex(&"ab".repeat(32)).unwrap(),
+                now,
+                now,
+            )
+            .unwrap();
+            store
+                .record_agreement(
+                    &AgreementRecord {
+                        agreement_id: "route-agreement-1".into(),
+                        kind: AgreementKind::TribalSigned,
+                        source_scope: vec!["capacity-2026".into()],
+                        product_class: "painted-opportunity-shapefile".into(),
+                        evidence,
+                        authority_of_record: "Example Signatory, Example Nation".into(),
+                        requester_binding: super::interim_operator_identity(),
+                        conditions: Conditions::default(),
+                        recorded_by: super::interim_operator_identity(),
+                    },
+                    None,
+                    false,
+                )
+                .unwrap();
+        }
         let app = router(
             test_node(vec![entry]),
             &ServerConfig {
@@ -2039,10 +2336,39 @@ mod tests {
                 ..ServerConfig::default()
             },
         );
+        // 1. Obtain a node-witnessed session.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let session = json_response(response).await["session"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // 2. Serve the source pack INTO the session — the node witnesses it.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/packs/capacity-2026/tables/capacity/features")
+                    .header(header::HOST, "127.0.0.1")
+                    .header(crate::session::SESSION_HEADER, session.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // 3. Export against the session.
         let body = json!({
             "product": "route-site",
-            "source_packs": ["capacity-2026"],
-            "requester": "route-test",
+            "session": session.clone(),
             "features": [{
                 "geometry": {
                     "type": "Polygon",
@@ -2072,11 +2398,21 @@ mod tests {
             payload["files"]["tsdf_json"]["name"],
             "route-site.tsdf.json"
         );
+        // The SOVEREIGN record, never the provisional wording (B3).
+        assert_eq!(
+            payload["ceremony"]["process"],
+            geobase_gpkg::ceremony::SOVEREIGN_PROCESS
+        );
         assert_eq!(
             payload["ceremony"]["basis"],
-            geobase_gpkg::ceremony::PROVISIONAL_BASIS
+            geobase_gpkg::ceremony::SOVEREIGN_BASIS
         );
-        assert!(exports_dir.join("route-site.shp").is_file());
+        assert!(payload["publication_id"].is_string());
+        // The bundle publishes as a directory (B3 publication protocol).
+        assert!(exports_dir
+            .join("route-site")
+            .join("route-site.shp")
+            .is_file());
         assert!(exports_dir.join("node-audit.gpkg").is_file());
 
         // Same product name again -> 409, no overwrite through the API.
@@ -2088,8 +2424,9 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "product": "route-site",
-                            "source_packs": ["capacity-2026"],
-                            "requester": "route-test",
+                            // Sessions are reusable: the same witnessed
+                            // session backs the duplicate attempt.
+                            "session": session,
                             "features": [{
                                 "geometry": {
                                     "type": "Polygon",
@@ -2133,7 +2470,7 @@ mod tests {
         // browser never sends it and every RStep export dies as a 403.
         assert_eq!(
             response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS],
-            "content-type, x-geobase-export-token"
+            "content-type, x-geobase-export-token, x-geobase-session"
         );
 
         let foreign = axum::http::Request::builder()

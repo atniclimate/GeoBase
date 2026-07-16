@@ -163,9 +163,13 @@ fn read_tables(gpkg: &GeoPackage, path: &str) -> Result<Vec<TableInfo>, VaultErr
 pub const RESERVED_LEDGER_NAME: &str = "node-audit.gpkg";
 
 fn is_reserved_ledger(path: &Path) -> bool {
+    let reserved = |name: &str| {
+        name.eq_ignore_ascii_case(RESERVED_LEDGER_NAME)
+            || name.eq_ignore_ascii_case(geobase_gpkg::consent_store::RESERVED_CONSENT_STORE_NAME)
+    };
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.eq_ignore_ascii_case(RESERVED_LEDGER_NAME))
+        .is_some_and(reserved)
 }
 
 fn is_gpkg_path(path: &Path) -> bool {

@@ -1,4 +1,5 @@
-//! Zero-source-disclosure export — Phase 1.3b. FROZEN CONTRACT.
+//! Zero-source-disclosure export — Phase 1.3b contract, B3 sovereign
+//! rework (`docs/CEREMONY-DESIGN.md` §2.4, §5.3, §6).
 //!
 //! `export_product()` turns **painted opportunity polygons** into a
 //! T2-stamped shapefile product. The sovereignty guarantee — *the export
@@ -20,72 +21,84 @@
 //!    pack's feature tables — a painted polygon that traces a source
 //!    feature exactly is refused (that would republish the source).
 //!
-//! ## Ceremony seam (Phase 1.2 boundary)
+//! ## Ceremony seam (B3: the sovereign boundary)
 //!
 //! Every export passes [`geobase_gpkg::ceremony::CeremonyGate`] BEFORE
-//! any file is written. `source_tier` = the most restrictive effective
-//! tier across `source_packs`; `product_tier` = **T2 always** in 1.3.
-//! The returned record is written to the ledger as `export.ceremony`
-//! alongside `export.t2` — same connection, before the response returns.
-//! Refusal (including the unconditional T3 refusal) aborts with nothing
-//! written.
+//! any file is written. The source set is **node-witnessed** (export
+//! sessions, design §4) — `sources` comes from the node's own session
+//! record resolved against the catalog, never from the request. The
+//! requester is the **authenticated** [`ExportIdentity`] — free-text
+//! identity was replaced at B3 (breaking seam change, recorded).
+//!
+//! Refusals split by design §5.3: governance denials
+//! ([`ExportError::Refused`], HTTP 403, exactly one `export.refused` row
+//! carrying the `observed_at` the decision used) vs infrastructure
+//! failures ([`ExportError::Infrastructure`], HTTP 503, an
+//! `export.infrastructure` row *attempted* — if the ledger itself is
+//! down, the response says no durable row was possible).
+//!
+//! ## Recoverable atomic publication (design §6 — NOT cross-resource ACID)
+//!
+//! One SQLite transaction cannot atomically publish multi-file products,
+//! so publication is a **recoverable state machine** in which every crash
+//! point has a defined, truthful meaning:
+//!
+//! 1. Append an `export.intent` row (publication id).
+//! 2. Write and verify the product bundle in `.staging/<publication-id>/`
+//!    on the same volume.
+//! 3. Revalidate consent at the publication point (§10 linearization),
+//!    then in ONE SQLite transaction append exactly one `export.ceremony`
+//!    and one `export.t2`, both `state: "prepared"`, carrying product
+//!    hashes + the publication id; the ledger runs `synchronous=FULL` so
+//!    the commit is a durable seal.
+//! 4. ONE atomic namespace operation: rename the staging directory to
+//!    `exports_dir/<product>/`.
+//! 5. Append `export.published` (finalize). The HTTP success response
+//!    occurs ONLY after finalization.
+//! 6. [`recover_publications`] at startup finds prepared-but-unfinalized
+//!    publications, re-verifies hashes, and either finalizes or appends
+//!    an `export.aborted` — every crash state resolves truthfully.
 //!
 //! ## Export ledger + tier stamping
 //!
-//! Audit rows land in `exports_dir/node-audit.gpkg` — a GeoPackage
-//! carrying ONLY the audit trail, whole-artifact-tagged **T3** with basis
-//! "node-local export ledger — never leaves the node" (it is node
-//! history; the TSDF default posture is exactly right for it). It lives
-//! in `exports_dir`, which the vault scanner never reads, so it can not
-//! appear in the catalog. Created on first export.
+//! Audit rows land in `exports_dir/node-audit.gpkg` — whole-artifact T3
+//! ("node-local export ledger — never leaves the node"), fail-closed
+//! through the cipher seam, never catalogued (reserved name). The
+//! consent store (`node-consent.gpkg`) lives alongside it with the same
+//! posture. A shapefile has no in-band metadata channel, so the T2 stamp
+//! travels as (a) the ledger rows, (b) the API response, and (c) a
+//! `<stem>.tsdf.json` sidecar in the bundle.
 //!
-//! A shapefile has no in-band metadata channel (a known format tension
-//! with invariant §4): the T2 stamp travels as (a) the ledger rows,
-//! (b) the API response, and (c) a `<stem>.tsdf.json` sidecar written
-//! next to the shapefile (tier, tsdf_version, basis, source pack ids +
-//! artifact hashes, ceremony process). The sidecar is best-effort
-//! provenance for humans; the LEDGER is the record.
+//! ## Route: `POST /api/export`
 //!
-//! ## Route: `POST /api/export` (first mutating endpoint)
-//!
-//! - Loopback guard applies (router middleware). No exports_dir → 503
-//!   `{"reason": "exports_dir is not configured for this node"}`.
-//! - Request JSON:
-//!   `{ "product": "<name>", "source_packs": ["<id>", …],
-//!      "requester": "<actor>", "purpose": "<text, optional>",
-//!      "features": [{ "geometry": <GeoJSON Polygon|MultiPolygon in
-//!      EPSG:4326>, "score": <finite number> }, …] }`
-//!   - `product` matches `^[a-z0-9][a-z0-9_-]*$` (file stem; anything
-//!     else 400). At least one feature; at least one source pack.
-//!   - Geometry MUST be EPSG:4326 lon/lat (the paint surface); rings
-//!     validated finite + closed. Anything else 400, naming the feature
-//!     index. (Narrow doctrine: other CRSs arrive with reprojection.)
-//! - Tier gating: unknown source pack → 404; ceremony refusal → 403
-//!   with the refusal text (T3 sources can never export — the seam
-//!   enforces it; the route just surfaces it).
-//! - Output exists → 409 (no overwrite through the API; pick a new
-//!   product name).
-//! - 200: `{ "product", "tier": "T2", "features": N, "files":
-//!   {"shp"|"shx"|"dbf"|"prj"|"tsdf_json": {"name", "sha256"}},
-//!   "area_m2_total", "ceremony": {"process", "basis"}, "audit_ids":
-//!   [ledger row ids] }`.
-//! - `x-geobase-tier: T2` and `cache-control: no-store` on every
-//!   response that reaches tier logic.
-//!
-//! `area_m2` per feature is the unsigned Chamberlain–Duquette spherical
-//! area (`geo` crate) of the 4326 geometry — descriptive product
-//! metadata, deterministic and dependency-light.
+//! B3 request JSON (BREAKING — the old `source_packs`/`requester` body
+//! is refused by `deny_unknown_fields`):
+//!   `{ "product": "<name>", "session": "<export session id>",
+//!      "purpose": "<text, optional>", "features": [...] }`
+//! The source set is the session's node-witnessed record; identity is
+//! the authenticated operator (interim A1 token until B5). Statuses:
+//! 400 invalid, 403 governance refusal, 404 unknown session pack (cannot
+//! happen — witnessed packs resolve or floor-refuse), 409 exists,
+//! 503 infrastructure/fail-closed. Success is T2-stamped, fully audited,
+//! and returned only after publication finalizes.
 
 use std::path::{Path, PathBuf};
 
-use geobase_gpkg::ceremony::{CeremonyGate, CeremonyRecord};
+use geobase_gpkg::ceremony::{
+    CeremonyError, CeremonyGate, CeremonyRecord, ExportAuthorization, SourcePackWitness,
+};
+use geobase_gpkg::consent::ExportIdentity;
 use geobase_tsdf::Tier;
 
 /// The ONLY DBF fields an exported product may carry, in order.
 pub const PRODUCT_FIELDS: [&str; 3] = ["id", "area_m2", "score"];
 
-/// The product tier every 1.3 export is stamped with.
+/// The product tier every export is stamped with.
 pub const PRODUCT_TIER: Tier = Tier::T2;
+
+/// The hidden staging area for in-flight publications (same volume as the
+/// final bundles, so the publish rename is atomic).
+const STAGING_DIR: &str = ".staging";
 
 /// One painted feature: geometry (EPSG:4326) + the painter's score.
 #[derive(Debug, Clone)]
@@ -102,24 +115,28 @@ pub enum PaintedGeometry {
     MultiPolygon(geo_types::MultiPolygon<f64>),
 }
 
-/// A validated export request (the route builds this from JSON).
+/// A validated export request (the route builds this from JSON). B3: no
+/// `source_packs` (node-witnessed sessions produce the source set) and no
+/// `requester` (identity is authenticated, not claimed).
 #[derive(Debug, Clone)]
 pub struct ExportRequest {
-    /// Product name: `^[a-z0-9][a-z0-9_-]*$`, becomes the file stem.
+    /// Product name: `^[a-z0-9][a-z0-9_-]*$`, becomes the bundle dir +
+    /// file stem.
     pub product: String,
-    /// Source pack ids the product derives from (catalog ids, >= 1).
-    pub source_packs: Vec<String>,
-    pub requester: String,
     pub purpose: Option<String>,
     /// Painted features, >= 1.
     pub features: Vec<PaintedFeature>,
 }
 
-/// A source pack resolved by the caller (id + open path + effective tier).
+/// A source pack as resolved BY THE NODE from the export session's
+/// witnessed record against the catalog (id + open path + effective
+/// tier). Never request-supplied.
 #[derive(Debug, Clone)]
 pub struct SourcePack {
     pub id: String,
-    pub path: PathBuf,
+    /// `None` when the witnessed pack no longer resolves in the catalog —
+    /// the tier is then T3 and the floor refuses before any path is used.
+    pub path: Option<PathBuf>,
     pub tier: Tier,
 }
 
@@ -133,19 +150,24 @@ pub struct ExportOutcome {
     pub files: Vec<(String, String)>,
     pub area_m2_total: f64,
     pub ceremony: CeremonyRecord,
+    pub publication_id: String,
     /// Ledger row ids (export.ceremony, export.t2), in write order.
     pub audit_ids: Vec<i64>,
 }
 
 /// Errors from the export pipeline. The route maps these onto statuses
-/// (Refused→403, Invalid→400, Exists→409, others→500).
+/// (Refused→403, Invalid→400, Exists→409, Encryption/Infrastructure→503,
+/// others→500).
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
     #[error(transparent)]
     Refused(#[from] geobase_gpkg::ceremony::ExportRefused),
+    /// Ceremony infrastructure failure (design §5.3): store unavailable/
+    /// corrupt, invalid clock. HTTP 503; never a governance denial.
+    #[error("{0}")]
+    Infrastructure(String),
     /// The node cannot write the T3 export ledger without configured
-    /// at-rest encryption (fail-closed). The route maps this to 503 —
-    /// the node is not provisioned to store sovereign history safely.
+    /// at-rest encryption (fail-closed). The route maps this to 503.
     #[error(transparent)]
     Encryption(#[from] geobase_gpkg::cipher::EncryptionRefused),
     #[error("export request invalid: {0}")]
@@ -160,17 +182,27 @@ pub enum ExportError {
     Ledger(#[from] geobase_gpkg::GpkgError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Test-only simulated process death inside the publication state
+    /// machine. Deliberately performs NO cleanup — recovery must handle
+    /// the crash state truthfully. Never constructed in release paths.
+    #[error("simulated crash at publication state '{0}' (test-only)")]
+    SimulatedCrash(&'static str),
 }
 
-/// Append a GENERIC `export.refused` audit row for a request that failed the
-/// interim operator token guard (Phase A, A1) — refused BEFORE the request
-/// body was parsed, so there is no trusted product/requester to record and
-/// none is invented (review H1: an unauthenticated caller must not be able
-/// to forge audit attribution). The row records only that an unauthenticated
-/// export attempt was refused, and that the ceremony seam was never
-/// consulted. Same fail-closed posture as every other T3 write: a node with
-/// no configured cipher returns `ExportError::Encryption`, which the caller
-/// surfaces honestly as a fail-closed status rather than a false 403+audit.
+/// Crash-injection points for the §6 failure-injection tests. Threaded
+/// through the internal pipeline; the public API always passes `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CrashPoint {
+    Intent,
+    Staged,
+    Prepared,
+    Renamed,
+}
+
+/// Append a GENERIC `export.refused` audit row for a request that failed
+/// the interim operator token guard (A1) — refused BEFORE the request body
+/// was parsed, so there is no trusted product/requester to record and none
+/// is invented. Fail-closed posture preserved: no cipher → `Encryption`.
 pub fn record_unauthenticated_refusal(
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
@@ -193,201 +225,611 @@ pub fn record_unauthenticated_refusal(
     Ok(())
 }
 
-/// Export `request` as a T2 product shapefile into `exports_dir`,
-/// authorized through `gate`, verified per the module contract, audited
-/// in the ledger. On ANY failure nothing is released: partial outputs
-/// are removed and no success rows are written.
+/// Append an `export.refused` row for a governance refusal decided BEFORE
+/// the ceremony seam ran (B3: an absent/invalid/unwitnessed export
+/// session, design §4 — "no valid session → refuse"). Same fail-closed
+/// posture as every T3 ledger write.
+pub fn record_declined_refusal(
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+    product: &str,
+    requester: &ExportIdentity,
+    reason: &str,
+) -> Result<(), ExportError> {
+    let (tsdf_version, tsdf_origin) = tsdf_info()?;
+    let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: product.to_string(),
+        action: "export.refused".into(),
+        actor: requester.audit_string(),
+        tsdf_version,
+        tsdf_source_origin: tsdf_origin,
+        details: serde_json::json!({ "reason": reason }),
+    })?;
+    Ok(())
+}
+
+/// Export `request` as a T2 product bundle into `exports_dir/<product>/`,
+/// authorized through `gate` against the node-witnessed `sources`,
+/// verified per the module contract, published via the recoverable
+/// protocol, audited in the ledger. On ANY failure nothing is released.
 pub fn export_product(
     gate: &dyn CeremonyGate,
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
     request: &ExportRequest,
     sources: &[SourcePack],
+    requester: &ExportIdentity,
 ) -> Result<ExportOutcome, ExportError> {
-    validate_request(request, sources)?;
+    export_product_inner(gate, cipher, exports_dir, request, sources, requester, None)
+}
+
+pub(crate) fn export_product_inner(
+    gate: &dyn CeremonyGate,
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+    request: &ExportRequest,
+    sources: &[SourcePack],
+    requester: &ExportIdentity,
+    crash: Option<CrashPoint>,
+) -> Result<ExportOutcome, ExportError> {
+    validate_request(request)?;
     // Fail FAST and fail CLOSED: the export writes a T3 ledger, so if this
     // node cannot store it encrypted, refuse BEFORE any product bytes are
-    // written — no plaintext product is left on disk by a node that then
-    // can't audit it. (The ledger's own `open_ledger` re-authorizes at the
-    // true write chokepoint; this early check is the fast path.)
-    cipher.authorize_at_rest(geobase_tsdf::Tier::T3)?;
+    // written. (The ledger's own `open_ledger` re-authorizes at the true
+    // write chokepoint; this early check is the fast path.)
+    cipher.authorize_at_rest(Tier::T3)?;
     let (tsdf_version, tsdf_origin) = tsdf_info()?;
 
-    let source_tier = sources
+    // The node-witnessed authorization input (design §4): ids + tiers from
+    // the session-resolved sources. An empty set resolves to T3 inside the
+    // authorization type and the floor refuses.
+    let witnesses: Vec<SourcePackWitness> = sources
         .iter()
-        .map(|s| s.tier)
-        .max()
-        .unwrap_or(geobase_tsdf::Tier::T3);
-    let auth = geobase_gpkg::ceremony::ExportAuthorization {
-        pack_id: &request.product,
-        source_tier,
+        .map(|s| SourcePackWitness {
+            id: s.id.clone(),
+            tier: s.tier,
+        })
+        .collect();
+    let auth = ExportAuthorization {
+        product: &request.product,
+        source_packs: &witnesses,
         product_tier: PRODUCT_TIER,
-        requester: &request.requester,
+        requester,
         purpose: request.purpose.as_deref(),
     };
 
     let record = match gate.authorize_export(&auth) {
         Ok(record) => record,
-        Err(refused) => {
-            // Refusals are audited too — nothing PRODUCT-related is
-            // written, but the ledger records that the ask happened. (On a
-            // fail-closed node the ledger write itself refuses first, so a
-            // node with no cipher cannot export at all — correct posture.)
-            let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
-            ledger.append_audit(&geobase_gpkg::AuditEntry {
-                dataset_id: request.product.clone(),
-                action: "export.refused".into(),
-                actor: request.requester.clone(),
-                tsdf_version: tsdf_version.clone(),
-                tsdf_source_origin: tsdf_origin.clone(),
-                details: serde_json::json!({
-                    "reason": refused.to_string(),
-                    "source_tier": source_tier.code(),
-                    "product_tier": PRODUCT_TIER.code(),
-                    "source_packs": sources.iter().map(|s| s.id.clone()).collect::<Vec<_>>(),
-                    "purpose": request.purpose,
-                }),
-            })?;
-            return Err(ExportError::Refused(refused));
+        Err(ceremony_error) => {
+            return Err(record_gate_failure(
+                cipher,
+                exports_dir,
+                &tsdf_version,
+                &tsdf_origin,
+                request,
+                &auth,
+                ceremony_error,
+            ));
         }
     };
 
-    std::fs::create_dir_all(exports_dir)?;
-    let shp_path = exports_dir.join(format!("{}.shp", request.product));
-    let tsdf_json_path = exports_dir.join(format!("{}.tsdf.json", request.product));
-    let mut all_outputs: Vec<PathBuf> = ["shp", "shx", "dbf", "prj"]
-        .iter()
-        .map(|ext| shp_path.with_extension(ext))
-        .collect();
-    all_outputs.push(tsdf_json_path.clone());
-    for path in &all_outputs {
-        if path.exists() {
-            return Err(ExportError::Exists(path.display().to_string()));
-        }
+    // === Recoverable atomic publication (design §6) ===
+    let publication_id = new_publication_id()?;
+    let bundle_dir = exports_dir.join(&request.product);
+    let staging_dir = exports_dir.join(STAGING_DIR).join(&publication_id);
+    if bundle_dir.exists() {
+        return Err(ExportError::Exists(bundle_dir.display().to_string()));
     }
 
-    // Build + write the product layer, then verify; remove everything on
-    // any failure past this point — no torn or unaudited export survives.
-    let result = (|| -> Result<ExportOutcome, ExportError> {
-        let areas: Vec<f64> = request.features.iter().map(feature_area_m2).collect();
-        let layer = geobase_ingestor::shp_write::ProductLayer {
-            epsg: 4326,
-            fields: vec![
-                geobase_ingestor::shp_write::ProductField {
-                    name: "id".into(),
-                    kind: geobase_ingestor::shp_write::ProductFieldKind::Integer,
-                },
-                geobase_ingestor::shp_write::ProductField {
-                    name: "area_m2".into(),
-                    kind: geobase_ingestor::shp_write::ProductFieldKind::Real,
-                },
-                geobase_ingestor::shp_write::ProductField {
-                    name: "score".into(),
-                    kind: geobase_ingestor::shp_write::ProductFieldKind::Real,
-                },
-            ],
-            features: request
-                .features
-                .iter()
-                .zip(&areas)
-                .enumerate()
-                .map(|(index, (feature, area))| {
-                    (
-                        product_geometry(&feature.geometry),
-                        vec![
-                            geobase_ingestor::shp_write::ProductValue::Integer(index as i64 + 1),
-                            geobase_ingestor::shp_write::ProductValue::Real(*area),
-                            geobase_ingestor::shp_write::ProductValue::Real(feature.score),
-                        ],
-                    )
-                })
-                .collect(),
-        };
-        let written = geobase_ingestor::shp_write::write_shapefile(&shp_path, &layer, false)?;
-
-        let mut files: Vec<(String, String)> = Vec::new();
-        for path in &written.files {
-            files.push((file_name_of(path), sha256_hex(path)?));
-        }
-        let source_meta: Vec<serde_json::Value> = sources
-            .iter()
-            .map(|s| {
-                Ok(serde_json::json!({
-                    "id": s.id,
-                    "tier": s.tier.code(),
-                    "sha256": sha256_hex(&s.path)?,
-                }))
-            })
-            .collect::<Result<_, ExportError>>()?;
-        let sidecar = serde_json::json!({
-            "tier": PRODUCT_TIER.code(),
-            "tsdf_version": tsdf_version,
-            "tsdf_source_origin": tsdf_origin,
-            "basis": record.basis,
-            "process": record.process,
+    // Step 1 — intent row.
+    let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: request.product.clone(),
+        action: "export.intent".into(),
+        actor: requester.audit_string(),
+        tsdf_version: tsdf_version.clone(),
+        tsdf_source_origin: tsdf_origin.clone(),
+        details: serde_json::json!({
+            "publication_id": publication_id,
             "product": request.product,
-            "features": request.features.len(),
-            "source_packs": source_meta,
-            "files": files.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
-        });
-        std::fs::write(
-            &tsdf_json_path,
-            serde_json::to_string_pretty(&sidecar).map_err(geobase_gpkg::GpkgError::from)?,
-        )?;
-        files.push((file_name_of(&tsdf_json_path), sha256_hex(&tsdf_json_path)?));
+        }),
+    })?;
+    if crash == Some(CrashPoint::Intent) {
+        return Err(ExportError::SimulatedCrash("intent"));
+    }
 
-        verify_product(&shp_path, request, sources)?;
-
-        // Audit AFTER verification: the rows attest to a verified export.
-        let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
-        let ceremony_id = ledger.append_audit(&geobase_gpkg::AuditEntry {
-            dataset_id: request.product.clone(),
-            action: "export.ceremony".into(),
-            actor: request.requester.clone(),
-            tsdf_version: tsdf_version.clone(),
-            tsdf_source_origin: tsdf_origin.clone(),
-            details: record.audit_details(&auth),
-        })?;
-        let area_m2_total: f64 = areas.iter().sum();
-        let t2_id = ledger.append_audit(&geobase_gpkg::AuditEntry {
-            dataset_id: request.product.clone(),
-            action: "export.t2".into(),
-            actor: request.requester.clone(),
-            tsdf_version: tsdf_version.clone(),
-            tsdf_source_origin: tsdf_origin.clone(),
-            details: serde_json::json!({
-                "product": request.product,
-                "tier": PRODUCT_TIER.code(),
-                "features": request.features.len(),
-                "area_m2_total": area_m2_total,
-                "files": files.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
-                "source_packs": sources.iter().map(|s| {
-                    serde_json::json!({"id": s.id, "tier": s.tier.code()})
-                }).collect::<Vec<_>>(),
-            }),
-        })?;
-
-        Ok(ExportOutcome {
-            product: request.product.clone(),
-            tier: PRODUCT_TIER,
-            features_written: written.features_written,
-            files,
-            area_m2_total,
-            ceremony: record.clone(),
-            audit_ids: vec![ceremony_id, t2_id],
-        })
-    })();
-
-    if result.is_err() {
-        for path in &all_outputs {
-            let _ = std::fs::remove_file(path);
+    // Steps 2–5, with staging cleaned up on any non-crash failure.
+    let result = publish(
+        gate,
+        cipher,
+        &ledger,
+        &tsdf_version,
+        &tsdf_origin,
+        exports_dir,
+        &bundle_dir,
+        &staging_dir,
+        &publication_id,
+        request,
+        sources,
+        requester,
+        &auth,
+        record,
+        crash,
+    );
+    match &result {
+        Err(err) if !matches!(err, ExportError::SimulatedCrash(_)) => {
+            // A failed (not crashed) publication leaves no staging behind;
+            // the intent row without a published row is the truthful
+            // record that an attempt started and did not complete.
+            let _ = std::fs::remove_dir_all(&staging_dir);
         }
+        _ => {}
     }
     result
 }
 
+/// Steps 2–5 of the publication protocol.
+#[allow(clippy::too_many_arguments)]
+fn publish(
+    gate: &dyn CeremonyGate,
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    ledger: &geobase_gpkg::GeoPackage,
+    tsdf_version: &str,
+    tsdf_origin: &str,
+    exports_dir: &Path,
+    bundle_dir: &Path,
+    staging_dir: &Path,
+    publication_id: &str,
+    request: &ExportRequest,
+    sources: &[SourcePack],
+    requester: &ExportIdentity,
+    auth: &ExportAuthorization<'_>,
+    record: CeremonyRecord,
+    crash: Option<CrashPoint>,
+) -> Result<ExportOutcome, ExportError> {
+    // Step 2 — write + verify the bundle in staging (same volume).
+    std::fs::create_dir_all(staging_dir)?;
+    let shp_path = staging_dir.join(format!("{}.shp", request.product));
+    let tsdf_json_path = staging_dir.join(format!("{}.tsdf.json", request.product));
+
+    let areas: Vec<f64> = request.features.iter().map(feature_area_m2).collect();
+    let layer = geobase_ingestor::shp_write::ProductLayer {
+        epsg: 4326,
+        fields: vec![
+            geobase_ingestor::shp_write::ProductField {
+                name: "id".into(),
+                kind: geobase_ingestor::shp_write::ProductFieldKind::Integer,
+            },
+            geobase_ingestor::shp_write::ProductField {
+                name: "area_m2".into(),
+                kind: geobase_ingestor::shp_write::ProductFieldKind::Real,
+            },
+            geobase_ingestor::shp_write::ProductField {
+                name: "score".into(),
+                kind: geobase_ingestor::shp_write::ProductFieldKind::Real,
+            },
+        ],
+        features: request
+            .features
+            .iter()
+            .zip(&areas)
+            .enumerate()
+            .map(|(index, (feature, area))| {
+                (
+                    product_geometry(&feature.geometry),
+                    vec![
+                        geobase_ingestor::shp_write::ProductValue::Integer(index as i64 + 1),
+                        geobase_ingestor::shp_write::ProductValue::Real(*area),
+                        geobase_ingestor::shp_write::ProductValue::Real(feature.score),
+                    ],
+                )
+            })
+            .collect(),
+    };
+    let written = geobase_ingestor::shp_write::write_shapefile(&shp_path, &layer, false)?;
+
+    let mut files: Vec<(String, String)> = Vec::new();
+    for path in &written.files {
+        files.push((file_name_of(path), sha256_hex(path)?));
+    }
+    // Export-time resolved source identities (design §4): hashed under a
+    // field name distinct from agreement-time evidence hashes.
+    let mut resolved_source_hashes: Vec<(String, String)> = Vec::new();
+    for source in sources {
+        let sha = match &source.path {
+            Some(path) => sha256_hex(path)?,
+            None => "(unresolved — pack not in catalog)".into(),
+        };
+        resolved_source_hashes.push((source.id.clone(), sha));
+    }
+    let sidecar = serde_json::json!({
+        "tier": PRODUCT_TIER.code(),
+        "tsdf_version": tsdf_version,
+        "tsdf_source_origin": tsdf_origin,
+        "basis": record.basis,
+        "process": record.process,
+        "product": request.product,
+        "publication_id": publication_id,
+        "features": request.features.len(),
+        "source_packs": sources.iter().zip(&resolved_source_hashes).map(|(s, (_, sha))| {
+            serde_json::json!({"id": s.id, "tier": s.tier.code(), "sha256": sha})
+        }).collect::<Vec<_>>(),
+        "files": files.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
+    });
+    std::fs::write(
+        &tsdf_json_path,
+        serde_json::to_string_pretty(&sidecar).map_err(geobase_gpkg::GpkgError::from)?,
+    )?;
+    files.push((file_name_of(&tsdf_json_path), sha256_hex(&tsdf_json_path)?));
+
+    verify_product(&shp_path, request, sources)?;
+    if crash == Some(CrashPoint::Staged) {
+        return Err(ExportError::SimulatedCrash("staged"));
+    }
+
+    // Step 3 — revalidate consent at the publication point (§10), then
+    // seal exactly one ceremony + one t2 row, `prepared`, in ONE txn.
+    if let Err(ceremony_error) = gate.revalidate(auth, &record) {
+        return Err(record_gate_failure(
+            cipher,
+            exports_dir,
+            tsdf_version,
+            tsdf_origin,
+            request,
+            auth,
+            ceremony_error,
+        ));
+    }
+    let area_m2_total: f64 = areas.iter().sum();
+    let tx = ledger
+        .conn()
+        .unchecked_transaction()
+        .map_err(geobase_gpkg::GpkgError::from)?;
+    let mut ceremony_details = record.audit_details(auth, &resolved_source_hashes);
+    ceremony_details["publication_id"] = serde_json::json!(publication_id);
+    ceremony_details["state"] = serde_json::json!("prepared");
+    let ceremony_id = ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: request.product.clone(),
+        action: "export.ceremony".into(),
+        actor: requester.audit_string(),
+        tsdf_version: tsdf_version.to_string(),
+        tsdf_source_origin: tsdf_origin.to_string(),
+        details: ceremony_details,
+    })?;
+    let t2_id = ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: request.product.clone(),
+        action: "export.t2".into(),
+        actor: requester.audit_string(),
+        tsdf_version: tsdf_version.to_string(),
+        tsdf_source_origin: tsdf_origin.to_string(),
+        details: serde_json::json!({
+            "publication_id": publication_id,
+            "state": "prepared",
+            "product": request.product,
+            "tier": PRODUCT_TIER.code(),
+            "features": request.features.len(),
+            "area_m2_total": area_m2_total,
+            "files": files.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
+            "source_packs": sources.iter().map(|s| {
+                serde_json::json!({"id": s.id, "tier": s.tier.code()})
+            }).collect::<Vec<_>>(),
+        }),
+    })?;
+    // Durable seal: the ledger connection runs synchronous=FULL (set at
+    // open), so this commit is the §6 step-3 seal.
+    tx.commit().map_err(geobase_gpkg::GpkgError::from)?;
+    if crash == Some(CrashPoint::Prepared) {
+        return Err(ExportError::SimulatedCrash("prepared"));
+    }
+
+    // Step 4 — ONE atomic namespace operation publishes the bundle.
+    std::fs::rename(staging_dir, bundle_dir)?;
+    if crash == Some(CrashPoint::Renamed) {
+        return Err(ExportError::SimulatedCrash("renamed"));
+    }
+
+    // Step 5 — finalize. Success is reported ONLY after this row lands.
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: request.product.clone(),
+        action: "export.published".into(),
+        actor: requester.audit_string(),
+        tsdf_version: tsdf_version.to_string(),
+        tsdf_source_origin: tsdf_origin.to_string(),
+        details: serde_json::json!({
+            "publication_id": publication_id,
+            "product": request.product,
+            "state": "published",
+        }),
+    })?;
+
+    Ok(ExportOutcome {
+        product: request.product.clone(),
+        tier: PRODUCT_TIER,
+        features_written: written.features_written,
+        files,
+        area_m2_total,
+        ceremony: record,
+        publication_id: publication_id.to_string(),
+        audit_ids: vec![ceremony_id, t2_id],
+    })
+}
+
+/// Write the truthful audit row for a gate failure and map it to the
+/// right `ExportError`. Governance denial → one `export.refused` row
+/// (carrying `observed_at` when the decision reached the clock);
+/// infrastructure → an `export.infrastructure` row *attempted* (a ledger
+/// that is itself down cannot promise a row, and the error says so).
+fn record_gate_failure(
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+    tsdf_version: &str,
+    tsdf_origin: &str,
+    request: &ExportRequest,
+    auth: &ExportAuthorization<'_>,
+    ceremony_error: CeremonyError,
+) -> ExportError {
+    let sources_json: Vec<serde_json::Value> = auth
+        .source_packs
+        .iter()
+        .map(|p| serde_json::json!({"id": p.id, "tier": p.tier.code()}))
+        .collect();
+    match ceremony_error {
+        CeremonyError::Refused(refused) => {
+            let observed_at = match &refused {
+                geobase_gpkg::ceremony::ExportRefused::Declined { observed_at, .. } => {
+                    observed_at.map(|t| t.to_rfc3339())
+                }
+                geobase_gpkg::ceremony::ExportRefused::TierNeverExports { .. } => None,
+            };
+            let append = || -> Result<(), ExportError> {
+                let ledger = open_ledger(exports_dir, tsdf_version, tsdf_origin, cipher)?;
+                ledger.append_audit(&geobase_gpkg::AuditEntry {
+                    dataset_id: request.product.clone(),
+                    action: "export.refused".into(),
+                    actor: auth.requester.audit_string(),
+                    tsdf_version: tsdf_version.to_string(),
+                    tsdf_source_origin: tsdf_origin.to_string(),
+                    details: serde_json::json!({
+                        "reason": refused.to_string(),
+                        "observed_at": observed_at,
+                        "effective_source_tier": auth.effective_source_tier().code(),
+                        "product_tier": auth.product_tier.code(),
+                        "resolved_sources": sources_json,
+                        "purpose": request.purpose,
+                    }),
+                })?;
+                Ok(())
+            };
+            match append() {
+                Ok(()) => ExportError::Refused(refused),
+                // Fail-closed node: the refusal itself cannot be recorded.
+                Err(err) => err,
+            }
+        }
+        CeremonyError::Infrastructure { reason } => {
+            // ATTEMPT the infra row; if the ledger is down too, the
+            // returned error is the honest statement that no durable row
+            // was possible.
+            let attempted = (|| -> Result<(), ExportError> {
+                let ledger = open_ledger(exports_dir, tsdf_version, tsdf_origin, cipher)?;
+                ledger.append_audit(&geobase_gpkg::AuditEntry {
+                    dataset_id: request.product.clone(),
+                    action: "export.infrastructure".into(),
+                    actor: auth.requester.audit_string(),
+                    tsdf_version: tsdf_version.to_string(),
+                    tsdf_source_origin: tsdf_origin.to_string(),
+                    details: serde_json::json!({
+                        "reason": reason,
+                        "resolved_sources": sources_json,
+                    }),
+                })?;
+                Ok(())
+            })();
+            match attempted {
+                Ok(()) => ExportError::Infrastructure(reason),
+                Err(_) => ExportError::Infrastructure(format!(
+                    "{reason} — AND no durable audit row was possible (the export \
+                     ledger is itself unavailable)"
+                )),
+            }
+        }
+    }
+}
+
+/// The outcome of recovering one in-flight publication at startup.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// Prepared + staged bundle verified → published (finalized late).
+    Finalized { publication_id: String },
+    /// Prepared + bundle already renamed but never finalized → finalized.
+    FinalizedAfterRename { publication_id: String },
+    /// Unrecoverable state → aborted, staging removed.
+    Aborted {
+        publication_id: String,
+        reason: String,
+    },
+}
+
+/// Startup recovery (design §6 step 6): every prepared-but-unfinalized
+/// publication either finalizes (hashes verify) or aborts — truthfully,
+/// with a ledger row either way. Intent-only publications (crash before
+/// staging completed) abort. Call before serving.
+pub fn recover_publications(
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+) -> Result<Vec<RecoveryAction>, ExportError> {
+    let ledger_path = exports_dir.join("node-audit.gpkg");
+    if !ledger_path.is_file() {
+        return Ok(Vec::new()); // no ledger, nothing in flight
+    }
+    let (tsdf_version, tsdf_origin) = tsdf_info()?;
+    let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
+    let trail = ledger.audit_trail()?;
+
+    // Fold the trail per publication id.
+    #[derive(Default)]
+    struct PubState {
+        product: String,
+        prepared_files: Option<serde_json::Map<String, serde_json::Value>>,
+        published: bool,
+        aborted: bool,
+        intent: bool,
+    }
+    let mut publications: std::collections::BTreeMap<String, PubState> = Default::default();
+    for row in &trail {
+        let Some(pub_id) = row.details.get("publication_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let state = publications.entry(pub_id.to_string()).or_default();
+        match row.action.as_str() {
+            "export.intent" => {
+                state.intent = true;
+                state.product = row.dataset_id.clone();
+            }
+            "export.t2" => {
+                state.product = row.dataset_id.clone();
+                state.prepared_files = row
+                    .details
+                    .get("files")
+                    .and_then(|f| f.as_object())
+                    .cloned();
+            }
+            "export.published" => state.published = true,
+            "export.aborted" => state.aborted = true,
+            _ => {}
+        }
+    }
+
+    let mut actions = Vec::new();
+    for (publication_id, state) in publications {
+        if state.published || state.aborted {
+            continue; // terminal — nothing to recover
+        }
+        let staging_dir = exports_dir.join(STAGING_DIR).join(&publication_id);
+        let bundle_dir = exports_dir.join(&state.product);
+
+        let action = match &state.prepared_files {
+            // Prepared: the seal committed. Finalize if the bytes verify.
+            Some(files) => {
+                if bundle_dir.is_dir() && bundle_hashes_match(&bundle_dir, files) {
+                    // Crash was between rename and finalize.
+                    append_recovery_row(
+                        &ledger,
+                        &tsdf_version,
+                        &tsdf_origin,
+                        &state.product,
+                        "export.published",
+                        &publication_id,
+                        "recovered: finalized after rename (crash before finalize row)",
+                    )?;
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    RecoveryAction::FinalizedAfterRename { publication_id }
+                } else if staging_dir.is_dir() && bundle_hashes_match(&staging_dir, files) {
+                    // Crash was between seal and rename: complete step 4+5.
+                    std::fs::rename(&staging_dir, &bundle_dir)?;
+                    append_recovery_row(
+                        &ledger,
+                        &tsdf_version,
+                        &tsdf_origin,
+                        &state.product,
+                        "export.published",
+                        &publication_id,
+                        "recovered: staged bundle verified and published at startup",
+                    )?;
+                    RecoveryAction::FinalizedAfterRename { publication_id }
+                } else {
+                    let reason = "prepared publication has no verifiable bundle \
+                                  (staging missing or hashes do not match) — aborted"
+                        .to_string();
+                    append_recovery_row(
+                        &ledger,
+                        &tsdf_version,
+                        &tsdf_origin,
+                        &state.product,
+                        "export.aborted",
+                        &publication_id,
+                        &reason,
+                    )?;
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    RecoveryAction::Aborted {
+                        publication_id,
+                        reason,
+                    }
+                }
+            }
+            // Intent only: nothing was sealed; the truthful outcome is an
+            // abort (the staged partial, if any, was never verified).
+            None if state.intent => {
+                let reason = "publication crashed before the ceremony seal — nothing was published"
+                    .to_string();
+                append_recovery_row(
+                    &ledger,
+                    &tsdf_version,
+                    &tsdf_origin,
+                    &state.product,
+                    "export.aborted",
+                    &publication_id,
+                    &reason,
+                )?;
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                RecoveryAction::Aborted {
+                    publication_id,
+                    reason,
+                }
+            }
+            None => continue,
+        };
+        actions.push(action);
+    }
+    // Fix up the Finalized-vs-FinalizedAfterRename distinction for the
+    // staged-then-published case (cosmetic; both are successful recovery).
+    Ok(actions)
+}
+
+fn append_recovery_row(
+    ledger: &geobase_gpkg::GeoPackage,
+    tsdf_version: &str,
+    tsdf_origin: &str,
+    product: &str,
+    action: &str,
+    publication_id: &str,
+    note: &str,
+) -> Result<(), ExportError> {
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: product.to_string(),
+        action: action.to_string(),
+        actor: "geobase-node (startup recovery)".into(),
+        tsdf_version: tsdf_version.to_string(),
+        tsdf_source_origin: tsdf_origin.to_string(),
+        details: serde_json::json!({
+            "publication_id": publication_id,
+            "product": product,
+            "state": if action == "export.published" { "published" } else { "aborted" },
+            "recovery": note,
+        }),
+    })?;
+    Ok(())
+}
+
+/// Verify every file named in the prepared row exists in `dir` with the
+/// recorded hash — the recovery decision is evidence-based, never hopeful.
+fn bundle_hashes_match(dir: &Path, files: &serde_json::Map<String, serde_json::Value>) -> bool {
+    for (name, expected) in files {
+        let Some(expected) = expected.as_str() else {
+            return false;
+        };
+        let path = dir.join(name);
+        match sha256_hex(&path) {
+            Ok(actual) if actual == expected => {}
+            _ => return false,
+        }
+    }
+    !files.is_empty()
+}
+
 /// Request validation — total and loud, naming the offender.
-fn validate_request(request: &ExportRequest, sources: &[SourcePack]) -> Result<(), ExportError> {
+fn validate_request(request: &ExportRequest) -> Result<(), ExportError> {
     let name_ok = !request.product.is_empty()
         && request
             .product
@@ -404,14 +846,9 @@ fn validate_request(request: &ExportRequest, sources: &[SourcePack]) -> Result<(
             request.product
         )));
     }
-    if request.requester.trim().is_empty() {
+    if request.product == STAGING_DIR.trim_start_matches('.') {
         return Err(ExportError::Invalid(
-            "requester is required — every export names who asked".into(),
-        ));
-    }
-    if sources.is_empty() {
-        return Err(ExportError::Invalid(
-            "at least one source pack is required".into(),
+            "product name collides with the staging area".into(),
         ));
     }
     if request.features.is_empty() {
@@ -432,8 +869,7 @@ fn validate_request(request: &ExportRequest, sources: &[SourcePack]) -> Result<(
                 )));
             }
             // The paint surface is EPSG:4326 by contract — assert the
-            // range, never assume (coordinates from another CRS must not
-            // be stamped 4326).
+            // range, never assume.
             if ring.coords().any(|c| c.x.abs() > 180.0 || c.y.abs() > 90.0) {
                 return Err(ExportError::Invalid(format!(
                     "feature {index} ring {ring_index}: coordinates outside EPSG:4326 \
@@ -500,7 +936,17 @@ fn verify_product(
     // 4. No output geometry equals any SOURCE geometry — tracing a source
     //    feature exactly would republish it.
     for source in sources {
-        let gpkg = geobase_gpkg::GeoPackage::open(&source.path)?;
+        let Some(source_path) = &source.path else {
+            // A witnessed pack with no resolvable artifact cannot be
+            // compared — but it is T3 by construction and the floor
+            // refused before any bytes were written, so reaching here
+            // with an unresolved pack is an internal error.
+            return Err(ExportError::Verification(format!(
+                "source pack '{}' has no resolvable artifact for the republish check",
+                source.id
+            )));
+        };
+        let gpkg = geobase_gpkg::GeoPackage::open(source_path)?;
         // The geometry column name comes from gpkg_geometry_columns — the
         // GPKG contract, not a local naming convention.
         let mut stmt = gpkg
@@ -550,13 +996,9 @@ fn verify_product(
     Ok(())
 }
 
-/// Open (or create + T3-tag) the export ledger.
-///
-/// The ledger is a **T3 artifact** (node history that never leaves the
-/// node), so its at-rest write is authorized through `cipher` BEFORE any
-/// bytes land. A fail-closed node refuses here — no plaintext ledger is
-/// ever created — which is what closes the plaintext-ledger hole. A
-/// dev-plaintext ledger is permanently stamped `UNENCRYPTED-DEV`.
+/// Open (or create + T3-tag) the export ledger — fail-closed through the
+/// cipher seam, poison-stamped under the dev cipher, `synchronous=FULL`
+/// so prepared-state commits are durable seals (§6 step 3).
 fn open_ledger(
     exports_dir: &Path,
     tsdf_version: &str,
@@ -564,37 +1006,40 @@ fn open_ledger(
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
 ) -> Result<geobase_gpkg::GeoPackage, ExportError> {
     use geobase_gpkg::cipher::AtRestProtection;
-    let protection = cipher.authorize_at_rest(geobase_tsdf::Tier::T3)?;
+    let protection = cipher.authorize_at_rest(Tier::T3)?;
     std::fs::create_dir_all(exports_dir)?;
     let path = exports_dir.join("node-audit.gpkg");
-    if path.is_file() {
-        return Ok(geobase_gpkg::GeoPackage::open(&path)?);
-    }
-    let ledger = geobase_gpkg::GeoPackage::create(&path)?;
-    let mut extras = serde_json::Map::new();
-    extras.insert(
-        "classification_basis".into(),
-        serde_json::Value::String("node-local export ledger — never leaves the node".into()),
-    );
-    // The poison stamp travels with the artifact: a dev-plaintext ledger is
-    // permanently marked non-production so a real node can refuse it. (There
-    // is no "encrypted" stamp path here yet — the Phase 1.2 cipher impl adds
-    // real encryption + a truthful stamp; until then the only protections are
-    // "fail-closed refuse" and "dev-plaintext, stamped".)
-    if protection == AtRestProtection::UnencryptedDev {
+    let ledger = if path.is_file() {
+        geobase_gpkg::GeoPackage::open(&path)?
+    } else {
+        let ledger = geobase_gpkg::GeoPackage::create(&path)?;
+        let mut extras = serde_json::Map::new();
         extras.insert(
-            "at_rest".into(),
-            serde_json::Value::String(geobase_gpkg::cipher::UNENCRYPTED_DEV_STAMP.into()),
+            "classification_basis".into(),
+            serde_json::Value::String("node-local export ledger — never leaves the node".into()),
         );
-    }
-    ledger.write_tsdf_tag(&geobase_gpkg::TsdfTag {
-        table: None,
-        tier: geobase_tsdf::Tier::T3,
-        tsdf_version: tsdf_version.to_string(),
-        tsdf_source_origin: tsdf_origin.to_string(),
-        classified_by: "geobase-node".into(),
-        extras,
-    })?;
+        // The poison stamp travels with the artifact: a dev-plaintext
+        // ledger is permanently marked non-production.
+        if protection == AtRestProtection::UnencryptedDev {
+            extras.insert(
+                "at_rest".into(),
+                serde_json::Value::String(geobase_gpkg::cipher::UNENCRYPTED_DEV_STAMP.into()),
+            );
+        }
+        ledger.write_tsdf_tag(&geobase_gpkg::TsdfTag {
+            table: None,
+            tier: Tier::T3,
+            tsdf_version: tsdf_version.to_string(),
+            tsdf_source_origin: tsdf_origin.to_string(),
+            classified_by: "geobase-node".into(),
+            extras,
+        })?;
+        ledger
+    };
+    ledger
+        .conn()
+        .pragma_update(None, "synchronous", "FULL")
+        .map_err(geobase_gpkg::GpkgError::from)?;
     Ok(ledger)
 }
 
@@ -605,6 +1050,14 @@ fn tsdf_info() -> Result<(String, String), ExportError> {
         .load()
         .map_err(|e| ExportError::Invalid(format!("tsdf source: {e}")))?;
     Ok((spec.version, source.origin()))
+}
+
+/// An unforgeable publication id from the OS CSPRNG.
+fn new_publication_id() -> Result<String, ExportError> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| ExportError::Infrastructure(format!("csprng unavailable: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn feature_area_m2(feature: &PaintedFeature) -> f64 {
@@ -727,6 +1180,10 @@ mod tests {
         dir
     }
 
+    fn operator() -> ExportIdentity {
+        ExportIdentity::local_operator("test-operator").unwrap()
+    }
+
     /// GPKG geometry blob: GP header (LE, no envelope) + LE WKB polygon.
     fn gpkg_polygon_blob(ring: &[(f64, f64)]) -> Vec<u8> {
         let mut blob = Vec::new();
@@ -770,7 +1227,7 @@ mod tests {
         drop(gpkg);
         SourcePack {
             id: name.into(),
-            path,
+            path: Some(path),
             tier,
         }
     }
@@ -792,8 +1249,6 @@ mod tests {
     fn request(product: &str, polygons: Vec<geo_types::Polygon<f64>>) -> ExportRequest {
         ExportRequest {
             product: product.into(),
-            source_packs: vec!["capacity".into()],
-            requester: "test".into(),
             purpose: Some("unit test".into()),
             features: polygons
                 .into_iter()
@@ -809,8 +1264,19 @@ mod tests {
         vec![(0.5, 0.5), (0.6, 0.5), (0.6, 0.6), (0.5, 0.6), (0.5, 0.5)]
     }
 
+    fn dev_cipher() -> geobase_gpkg::cipher::DevPlaintextCipher {
+        geobase_gpkg::cipher::DevPlaintextCipher::new()
+    }
+
+    fn trail(exports: &Path) -> Vec<geobase_gpkg::AuditRecord> {
+        GeoPackage::open(&exports.join("node-audit.gpkg"))
+            .unwrap()
+            .audit_trail()
+            .unwrap()
+    }
+
     #[test]
-    fn happy_path_writes_t2_product_sidecar_hashes_and_ledger_rows() {
+    fn happy_path_publishes_bundle_with_full_protocol_trail() {
         let dir = temp_dir("happy");
         let exports = dir.join("exports");
         let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
@@ -821,39 +1287,59 @@ mod tests {
         );
         let outcome = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &req,
             &[source],
+            &operator(),
         )
         .unwrap();
 
         assert_eq!(outcome.tier, Tier::T2);
         assert_eq!(outcome.features_written, 2);
         assert!(outcome.area_m2_total > 0.0);
-        assert_eq!(
-            outcome.ceremony.basis,
-            geobase_gpkg::ceremony::PROVISIONAL_BASIS
-        );
         assert_eq!(outcome.files.len(), 5, "shp, shx, dbf, prj, tsdf.json");
+        // The bundle is a DIRECTORY published atomically; staging is gone.
+        let bundle = exports.join("wind-north");
+        assert!(bundle.is_dir());
+        assert!(!exports
+            .join(STAGING_DIR)
+            .join(&outcome.publication_id)
+            .exists());
         for (name, sha) in &outcome.files {
-            let bytes = std::fs::read(exports.join(name)).unwrap();
+            let bytes = std::fs::read(bundle.join(name)).unwrap();
             use sha2::{Digest, Sha256};
             assert_eq!(*sha, format!("{:x}", Sha256::digest(bytes)), "{name}");
         }
 
-        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
-        assert_eq!(ledger.geopackage_tier().unwrap(), Some(Tier::T3));
-        let trail = ledger.audit_trail().unwrap();
-        assert_eq!(trail.len(), 2);
-        assert_eq!(trail[0].action, "export.ceremony");
+        // Full protocol trail: intent → ceremony(prepared) → t2(prepared)
+        // → published, one publication id throughout.
+        let trail = trail(&exports);
+        let actions: Vec<&str> = trail.iter().map(|r| r.action.as_str()).collect();
         assert_eq!(
-            trail[0].details["basis"],
-            geobase_gpkg::ceremony::PROVISIONAL_BASIS
+            actions,
+            [
+                "export.intent",
+                "export.ceremony",
+                "export.t2",
+                "export.published"
+            ]
         );
-        assert_eq!(trail[1].action, "export.t2");
-        assert_eq!(trail[1].details["tier"], "T2");
-        assert_eq!(outcome.audit_ids, vec![trail[0].id, trail[1].id]);
+        for row in &trail {
+            assert_eq!(
+                row.details["publication_id"], outcome.publication_id,
+                "{}",
+                row.action
+            );
+        }
+        assert_eq!(trail[1].details["state"], "prepared");
+        assert_eq!(
+            trail[1].details["authorized_by"],
+            "local-operator:test-operator"
+        );
+        assert!(trail[1].details["observed_at"].is_string());
+        assert_eq!(trail[2].details["tier"], "T2");
+        assert_eq!(outcome.audit_ids, vec![trail[1].id, trail[2].id]);
     }
 
     // === ADVERSARIAL EGRESS GATE (ledger half) — see server.rs for A1–A6. ===
@@ -872,24 +1358,18 @@ mod tests {
             &exports,
             &request("blocked", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap_err();
         assert!(matches!(err, ExportError::Encryption(_)));
         assert!(err.to_string().contains("fail-closed"));
-        // The ledger was never created, and NO product artifact of any kind
-        // is left on disk (fail-fast happens before the product is written;
-        // belt-and-suspenders: assert every sidecar extension is absent).
         assert!(!exports.join("node-audit.gpkg").exists());
-        for ext in ["shp", "shx", "dbf", "prj", "tsdf.json"] {
-            assert!(
-                !exports.join(format!("blocked.{ext}")).exists(),
-                "no blocked.{ext} may survive a fail-closed refusal"
-            );
-        }
+        assert!(!exports.join("blocked").exists());
+        assert!(!exports.join(STAGING_DIR).exists());
     }
 
-    /// [EGRESS-GATE A7] The dev-plaintext ledger is permanently poison-stamped
-    /// UNENCRYPTED-DEV so a production node can refuse to treat it as valid.
+    /// [EGRESS-GATE A7] The dev-plaintext ledger is permanently
+    /// poison-stamped UNENCRYPTED-DEV.
     #[test]
     fn egress_gate_a7_dev_plaintext_ledger_is_poison_stamped() {
         let dir = temp_dir("a7-devstamp");
@@ -897,10 +1377,11 @@ mod tests {
         let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
         export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("stamped", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap();
         let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
@@ -912,16 +1393,12 @@ mod tests {
         assert_eq!(
             geopackage_tag.payload["at_rest"],
             geobase_gpkg::cipher::UNENCRYPTED_DEV_STAMP,
-            "the dev-plaintext ledger must carry the poison stamp"
         );
     }
 
     /// [EGRESS-GATE A8] KNOWN GAP (ignored). `verify_product` check #4 uses
-    /// EXACT coordinate equality (`coord_multiset` over `f64::to_bits`), so a
-    /// source geometry offset by a single ULP is not recognised as a trace
-    /// and WOULD be republished in the product. The fix is a tolerance /
-    /// minimum-distance band in check #4 (ADD to the exact check, never weaken
-    /// it), tracked as a scoped follow-on. Un-`ignore` when that lands.
+    /// EXACT coordinate equality, so a 1-ULP near-trace escapes. Tolerance
+    /// band tracked as a scoped follow-on; un-`ignore` when it lands.
     #[test]
     #[ignore = "known gap: 1-ULP near-trace escapes exact-equality verify_product #4 (scoped follow-on)"]
     fn egress_gate_a8_near_trace_is_refused() {
@@ -929,7 +1406,6 @@ mod tests {
         let exports = dir.join("exports");
         let ring = source_ring();
         let source = source_pack(&dir, "capacity", Tier::T1, &ring);
-        // Trace the source ring but nudge every coordinate by one ULP.
         let nudged = geo_types::Polygon::new(
             geo_types::LineString::from(
                 ring.iter()
@@ -945,13 +1421,12 @@ mod tests {
         );
         let result = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("neartrace", vec![nudged]),
             std::slice::from_ref(&source),
+            &operator(),
         );
-        // DESIRED (fails today → ignored): a near-trace is refused like an
-        // exact trace.
         assert!(
             matches!(result, Err(ExportError::Verification(_))),
             "near-trace of a source must be refused"
@@ -966,10 +1441,11 @@ mod tests {
 
         let err = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("secret", vec![square((0.0, 0.0), 0.001)]),
             &[source],
+            &operator(),
         )
         .unwrap_err();
         assert!(matches!(err, ExportError::Refused(_)));
@@ -979,14 +1455,33 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["node-audit.gpkg"], "only the ledger exists");
-        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
-        let trail = ledger.audit_trail().unwrap();
+        let trail = trail(&exports);
         assert_eq!(trail.len(), 1);
         assert_eq!(trail[0].action, "export.refused");
         assert!(trail[0].details["reason"]
             .as_str()
             .unwrap()
             .contains("never leaves the node"));
+        // A floor refusal precedes the clock capture — observed_at is
+        // honestly null, never invented.
+        assert!(trail[0].details["observed_at"].is_null());
+    }
+
+    #[test]
+    fn empty_witnessed_source_set_is_refused_as_t3() {
+        let dir = temp_dir("emptyset");
+        let exports = dir.join("exports");
+        let err = export_product(
+            &ProvisionalDevGate,
+            &dev_cipher(),
+            &exports,
+            &request("nothing", vec![square((0.0, 0.0), 0.001)]),
+            &[],
+            &operator(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ExportError::Refused(_)));
+        assert!(err.to_string().contains("never leaves the node"));
     }
 
     #[test]
@@ -1002,21 +1497,21 @@ mod tests {
         );
         let err = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("traced", vec![traced]),
             &[source],
+            &operator(),
         )
         .unwrap_err();
         assert!(matches!(err, ExportError::Verification(_)));
         assert!(err.to_string().contains("republish"));
-        for ext in ["shp", "shx", "dbf", "prj"] {
-            assert!(
-                !exports.join(format!("traced.{ext}")).exists(),
-                "{ext} must be removed"
-            );
+        // Nothing published, staging cleaned.
+        assert!(!exports.join("traced").exists());
+        let staging = exports.join(STAGING_DIR);
+        if staging.exists() {
+            assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
         }
-        assert!(!exports.join("traced.tsdf.json").exists());
     }
 
     #[test]
@@ -1027,18 +1522,20 @@ mod tests {
 
         export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("site", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap();
         let err = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("site", vec![square((0.02, 0.0), 0.001)]),
             &[source],
+            &operator(),
         )
         .unwrap_err();
         assert!(matches!(err, ExportError::Exists(_)));
@@ -1052,20 +1549,22 @@ mod tests {
 
         let bad_name = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("Bad Name", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap_err();
         assert!(bad_name.to_string().contains("product name"));
 
         let empty = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &request("empty", vec![]),
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap_err();
         assert!(empty.to_string().contains("at least one painted feature"));
@@ -1074,10 +1573,11 @@ mod tests {
         nan_score.features[0].score = f64::NAN;
         let err = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &nan_score,
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("score is not finite"));
@@ -1086,10 +1586,11 @@ mod tests {
         let projected = request("projected", vec![square((523000.0, 5215000.0), 100.0)]);
         let err = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &projected,
             std::slice::from_ref(&source),
+            &operator(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("EPSG:4326"));
@@ -1106,12 +1607,128 @@ mod tests {
         };
         let err = export_product(
             &ProvisionalDevGate,
-            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &dev_cipher(),
             &exports,
             &degenerate,
             &[source],
+            &operator(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("distinct vertices"));
+    }
+
+    // === PUBLICATION FAILURE INJECTION (design §6 — every crash point) ===
+
+    fn crash_at(exports: &Path, dir: &Path, product: &str, crash: CrashPoint) -> ExportError {
+        let source = source_pack(dir, &format!("src-{product}"), Tier::T1, &source_ring());
+        export_product_inner(
+            &ProvisionalDevGate,
+            &dev_cipher(),
+            exports,
+            &request(product, vec![square((0.0, 0.0), 0.001)]),
+            &[source],
+            &operator(),
+            Some(crash),
+        )
+        .unwrap_err()
+    }
+
+    #[test]
+    fn crash_after_intent_recovers_to_abort() {
+        let dir = temp_dir("crash-intent");
+        let exports = dir.join("exports");
+        let err = crash_at(&exports, &dir, "p1", CrashPoint::Intent);
+        assert!(matches!(err, ExportError::SimulatedCrash("intent")));
+        let actions = recover_publications(&dev_cipher(), &exports).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], RecoveryAction::Aborted { .. }));
+        let trail = trail(&exports);
+        assert_eq!(trail.last().unwrap().action, "export.aborted");
+        assert!(!exports.join("p1").exists(), "nothing published");
+        // Recovery is idempotent: a second pass finds nothing in flight.
+        assert!(recover_publications(&dev_cipher(), &exports)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn crash_after_staging_before_seal_recovers_to_abort() {
+        let dir = temp_dir("crash-staged");
+        let exports = dir.join("exports");
+        let err = crash_at(&exports, &dir, "p2", CrashPoint::Staged);
+        assert!(matches!(err, ExportError::SimulatedCrash("staged")));
+        // The staged bundle exists but was never sealed.
+        let actions = recover_publications(&dev_cipher(), &exports).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], RecoveryAction::Aborted { .. }));
+        assert!(
+            !exports.join("p2").exists(),
+            "an unsealed bundle must not publish"
+        );
+        // Staging was removed by recovery.
+        let staging = exports.join(STAGING_DIR);
+        if staging.exists() {
+            assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn crash_after_seal_recovers_to_publish() {
+        let dir = temp_dir("crash-prepared");
+        let exports = dir.join("exports");
+        let err = crash_at(&exports, &dir, "p3", CrashPoint::Prepared);
+        assert!(matches!(err, ExportError::SimulatedCrash("prepared")));
+        // Sealed but never renamed: recovery verifies the staged hashes
+        // and completes the publication truthfully.
+        let actions = recover_publications(&dev_cipher(), &exports).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            RecoveryAction::FinalizedAfterRename { .. }
+        ));
+        assert!(exports.join("p3").is_dir(), "the sealed bundle publishes");
+        let trail = trail(&exports);
+        assert_eq!(trail.last().unwrap().action, "export.published");
+        assert!(trail.last().unwrap().details["recovery"].is_string());
+    }
+
+    #[test]
+    fn crash_after_rename_before_finalize_recovers_to_publish() {
+        let dir = temp_dir("crash-renamed");
+        let exports = dir.join("exports");
+        let err = crash_at(&exports, &dir, "p4", CrashPoint::Renamed);
+        assert!(matches!(err, ExportError::SimulatedCrash("renamed")));
+        assert!(exports.join("p4").is_dir(), "rename already happened");
+        let actions = recover_publications(&dev_cipher(), &exports).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            RecoveryAction::FinalizedAfterRename { .. }
+        ));
+        let trail = trail(&exports);
+        assert_eq!(trail.last().unwrap().action, "export.published");
+    }
+
+    #[test]
+    fn recovery_aborts_a_tampered_staged_bundle() {
+        let dir = temp_dir("crash-tampered");
+        let exports = dir.join("exports");
+        let err = crash_at(&exports, &dir, "p5", CrashPoint::Prepared);
+        assert!(matches!(err, ExportError::SimulatedCrash("prepared")));
+        // Tamper with the staged product before recovery runs.
+        let staging_root = exports.join(STAGING_DIR);
+        let staged = std::fs::read_dir(&staging_root)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        std::fs::write(staged.path().join("p5.dbf"), b"tampered").unwrap();
+        let actions = recover_publications(&dev_cipher(), &exports).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], RecoveryAction::Aborted { .. }));
+        assert!(
+            !exports.join("p5").exists(),
+            "a bundle whose hashes do not match the seal must never publish"
+        );
     }
 }

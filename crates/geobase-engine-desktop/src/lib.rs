@@ -13,6 +13,7 @@
 pub mod export;
 pub mod place;
 pub mod server;
+pub mod session;
 pub mod vault;
 
 use std::path::Path;
