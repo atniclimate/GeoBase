@@ -16,9 +16,15 @@ Writes into data/fixtures/geopack/ (tiny, committed-fixture-sized; AGENTS.md §7
   pinned gate camera (-123.13, 47.14) with visually distinct extents, so each
   layer package repaints its own pixels independently. Fields: class (str) +
   code (int32); scenario (str) + depth_m (float64).
+- ``capacity_small.shp`` / ``nogo_small.shp`` (+ sidecars) — RStep 1.3d gate
+  fixtures: EPSG:4326 renewable-capacity zones and partially overlapping
+  exclusion zones. Fields: class (str) + mw_per_km2 (float64); kind (str) +
+  severity (int32).
 - ``landcover_pkg.toml`` / ``flood_pkg.toml`` — package manifests (frozen
   schema: geobase-ingestor::package module docs) that `geopack package`
   consumes to build the two gate GeoPacks.
+- ``pkg-capacity.toml`` / ``pkg-nogo.toml`` — T1 package manifests for the
+  RStep gate source layers.
 
 Determinism: fixed integer seed, analytic surface, no timestamps (the DBF
 last-update stamp is pinned), so reruns are byte-identical. The surface is
@@ -93,6 +99,26 @@ FLOOD_FEATURES = [
     ("major", 1.45, (-123.045, 47.132, -123.025, 47.160)),
     ("minor", 0.55, (-123.112, 47.098, -123.082, 47.129)),
     ("major", 1.90, (-123.076, 47.095, -123.030, 47.126)),
+]
+
+# RStep gate fixtures (Phase 1.3d): the same camera neighborhood as the 1.1
+# layers. Capacity zones leave narrow gaps between polygons; NoGo zones cross
+# only parts of them so the scenario retains paintable opportunity areas.
+CAPACITY_WINDOW = (-123.23, 47.10, -123.03, 47.18)
+NOGO_WINDOW = CAPACITY_WINDOW
+CAPACITY_FEATURES = [
+    ("solar", 4.50, (-123.225, 47.145, -123.185, 47.172)),
+    ("wind", 9.00, (-123.180, 47.143, -123.135, 47.170)),
+    ("solar", 6.25, (-123.130, 47.142, -123.085, 47.168)),
+    ("wind", 11.00, (-123.220, 47.105, -123.175, 47.138)),
+    ("geothermal", 3.50, (-123.168, 47.108, -123.118, 47.137)),
+    ("solar", 7.75, (-123.110, 47.104, -123.045, 47.136)),
+]
+NOGO_FEATURES = [
+    ("cultural", 3, (-123.205, 47.132, -123.165, 47.160)),
+    ("habitat", 2, (-123.155, 47.115, -123.115, 47.151)),
+    ("floodway", 3, (-123.090, 47.120, -123.055, 47.165)),
+    ("setback", 1, (-123.222, 47.106, -123.200, 47.127)),
 ]
 
 
@@ -243,7 +269,15 @@ def write_layer_shp(
     _pin_dbf_stamp(shp.with_suffix(".dbf"))
 
 
-def write_layer_manifest(path: Path, package_id: str, name: str, table: str, shp_name: str) -> None:
+def write_layer_manifest(
+    path: Path,
+    package_id: str,
+    name: str,
+    table: str,
+    shp_name: str,
+    tier: str = "T0",
+    basis: str = "synthetic fixture - public by construction",
+) -> None:
     """Package manifest per the frozen schema (geobase-ingestor::package docs).
     The input path is RELATIVE — resolved against the manifest's directory."""
     path.write_text(
@@ -252,8 +286,8 @@ def write_layer_manifest(path: Path, package_id: str, name: str, table: str, shp
                 "[package]",
                 f'id = "{package_id}"',
                 f'name = "{name}"',
-                'tier = "T0"',
-                'basis = "synthetic fixture - public by construction"',
+                f'tier = "{tier}"',
+                f'basis = "{basis}"',
                 "",
                 "[[inputs]]",
                 'kind = "vector"',
@@ -298,6 +332,27 @@ def verify_layer_shp(
         f"[fixture] {shp.name} EPSG:{LAYER_EPSG} {len(features)} polygon features, "
         f"window lon [{w}, {e}] lat [{s}, {n}]"
     )
+
+
+def verify_rstep_layout() -> None:
+    """Assert exclusions overlap capacity while a known opportunity gap remains."""
+
+    def overlaps(
+        left: tuple[float, float, float, float], right: tuple[float, float, float, float]
+    ) -> bool:
+        lw, ls, le, ln = left
+        rw, rs, re, rn = right
+        return max(lw, rw) < min(le, re) and max(ls, rs) < min(ln, rn)
+
+    capacity_rects = [rect for _, _, rect in CAPACITY_FEATURES]
+    nogo_rects = [rect for _, _, rect in NOGO_FEATURES]
+    assert all(
+        any(overlaps(nogo, capacity) for capacity in capacity_rects) for nogo in nogo_rects
+    )
+    gap = (-123.100, 47.150)
+    assert any(w < gap[0] < e and s < gap[1] < n for w, s, e, n in capacity_rects)
+    assert not any(w <= gap[0] <= e and s <= gap[1] <= n for w, s, e, n in nogo_rects)
+    print("[fixture] RStep layout: every NoGo zone overlaps capacity; opportunity gap retained")
 
 
 def _null_mask(arr: np.ndarray) -> np.ndarray:
@@ -398,13 +453,19 @@ def main() -> int:
     shp = out_dir / "parcels_small.shp"
     landcover = out_dir / "landcover_small.shp"
     flood = out_dir / "flood_small.shp"
+    capacity = out_dir / "capacity_small.shp"
+    nogo = out_dir / "nogo_small.shp"
     stale_files = [
         dem,
         *(shp.with_suffix(ext) for ext in SHP_EXTS),
         *(landcover.with_suffix(ext) for ext in SHP_EXTS),
         *(flood.with_suffix(ext) for ext in SHP_EXTS),
+        *(capacity.with_suffix(ext) for ext in SHP_EXTS),
+        *(nogo.with_suffix(ext) for ext in SHP_EXTS),
         out_dir / "landcover_pkg.toml",
         out_dir / "flood_pkg.toml",
+        out_dir / "pkg-capacity.toml",
+        out_dir / "pkg-nogo.toml",
     ]
     for stale in stale_files:
         if stale.exists():
@@ -421,6 +482,15 @@ def main() -> int:
     verify_layer_shp(landcover, LANDCOVER_FEATURES, ["class", "code"], LANDCOVER_WINDOW)
     write_layer_shp(flood, FLOOD_FEATURES, ["scenario", "depth_m"], ["object", "float64"])
     verify_layer_shp(flood, FLOOD_FEATURES, ["scenario", "depth_m"], FLOOD_WINDOW)
+    write_layer_shp(
+        capacity, CAPACITY_FEATURES, ["class", "mw_per_km2"], ["object", "float64"]
+    )
+    verify_layer_shp(
+        capacity, CAPACITY_FEATURES, ["class", "mw_per_km2"], CAPACITY_WINDOW
+    )
+    write_layer_shp(nogo, NOGO_FEATURES, ["kind", "severity"], ["object", "int32"])
+    verify_layer_shp(nogo, NOGO_FEATURES, ["kind", "severity"], NOGO_WINDOW)
+    verify_rstep_layout()
     write_layer_manifest(
         out_dir / "landcover_pkg.toml",
         "landcover-2026",
@@ -430,6 +500,24 @@ def main() -> int:
     )
     write_layer_manifest(
         out_dir / "flood_pkg.toml", "flood-2026", "Synthetic Flood 2026", "flood", flood.name
+    )
+    write_layer_manifest(
+        out_dir / "pkg-capacity.toml",
+        "rstep-capacity-2026",
+        "Synthetic Renewable Capacity Zones",
+        "capacity",
+        capacity.name,
+        tier="T1",
+        basis="synthetic provenance - generated for the RStep 1.3d gate",
+    )
+    write_layer_manifest(
+        out_dir / "pkg-nogo.toml",
+        "rstep-nogo-2026",
+        "Synthetic NoGo Exclusion Zones",
+        "nogo",
+        nogo.name,
+        tier="T1",
+        basis="synthetic provenance - generated for the RStep 1.3d gate",
     )
 
     report_sizes(out_dir)
