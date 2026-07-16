@@ -1469,6 +1469,92 @@ mod tests {
         assert_eq!(refused.len(), 2, "floor refusal + unknown-session refusal");
     }
 
+    /// §11 (B3): a corrupt/unreadable consent store is an INFRASTRUCTURE
+    /// failure — HTTP 503, distinct from a governance 403, never
+    /// attributed to the sovereign ceremony.
+    #[tokio::test]
+    async fn corrupt_consent_store_returns_503_not_403() {
+        let entry = create_pack("infra-t0.gpkg", Some(Tier::T0));
+        let id = entry.id.clone();
+        let exports = temp_path("infra-exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        // A garbage file bearing the reserved consent-store name.
+        std::fs::write(
+            exports.join(geobase_gpkg::consent_store::RESERVED_CONSENT_STORE_NAME),
+            b"not a database",
+        )
+        .unwrap();
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("infra-token".into()),
+                ..ServerConfig::default()
+            },
+        );
+        // Witness the T0 pack into a session so the request reaches the
+        // gate's store access (past the floor).
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let session = json_response(response).await["session"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(crate::session::SESSION_HEADER, session.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json!({
+            "product": "infra-blocked",
+            "session": session,
+            "features": [{
+                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.0]]]},
+                "score": 1.0
+            }]
+        });
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header("content-type", "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "infra-token")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a corrupt consent store is infrastructure, never a governance denial"
+        );
+        let reason = json_response(response).await["reason"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            reason.contains("never attributed to the sovereign ceremony"),
+            "{reason}"
+        );
+        assert!(!exports.join("infra-blocked").exists(), "no product bytes");
+    }
+
     /// [EGRESS-GATE A5] The T3 export ledger AND the T3 consent store are
     /// never catalogued — enforced by name, not merely by living in a
     /// separate directory. Even placed INSIDE the vault (a

@@ -607,7 +607,12 @@ fn record_gate_failure(
                 Err(err) => err,
             }
         }
-        CeremonyError::Infrastructure { reason } => {
+        ref infrastructure @ CeremonyError::Infrastructure { ref reason } => {
+            // Surface the FULL taxonomy sentence (a technical outage is
+            // never attributed to the sovereign ceremony); the audit row
+            // keeps the bare reason.
+            let display = infrastructure.to_string();
+            let reason = reason.clone();
             // ATTEMPT the infra row; if the ledger is down too, the
             // returned error is the honest statement that no durable row
             // was possible.
@@ -627,9 +632,9 @@ fn record_gate_failure(
                 Ok(())
             })();
             match attempted {
-                Ok(()) => ExportError::Infrastructure(reason),
+                Ok(()) => ExportError::Infrastructure(display),
                 Err(_) => ExportError::Infrastructure(format!(
-                    "{reason} — AND no durable audit row was possible (the export \
+                    "{display} — AND no durable audit row was possible (the export \
                      ledger is itself unavailable)"
                 )),
             }
@@ -1615,6 +1620,88 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("distinct vertices"));
+    }
+
+    /// §11: the expired-refusal `export.refused` row carries the SAME
+    /// `observed_at` instant the expiry comparison used — the trail proves
+    /// WHICH time made the decision, on the refusal path too. Runs the
+    /// real sovereign gate against a store holding an expired agreement.
+    #[test]
+    fn expired_refusal_row_carries_observed_at() {
+        use geobase_gpkg::consent::{
+            Conditions, ConsentBasis, ExportIdentity as Id, Sha256Digest, UtcInstant,
+        };
+        use geobase_gpkg::consent_gate::RecordedConsentGate;
+        use geobase_gpkg::consent_store::{AgreementKind, AgreementRecord, ConsentStore};
+
+        let dir = temp_dir("expired-row");
+        let exports = dir.join("exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        let requester = Id::local_operator("test-operator").unwrap();
+        let store = ConsentStore::open_or_create(&exports, "0.9.4", "vendored:test", &dev_cipher())
+            .unwrap();
+        let now = UtcInstant::now().unwrap();
+        let evidence = ConsentBasis::signed_agreement(
+            "agreements/x.pdf",
+            Sha256Digest::from_hex(&"ab".repeat(32)).unwrap(),
+            now,
+            now,
+        )
+        .unwrap();
+        store
+            .record_agreement(
+                &AgreementRecord {
+                    agreement_id: "expired".into(),
+                    kind: AgreementKind::TribalSigned,
+                    source_scope: vec!["capacity".into()],
+                    product_class: "x".into(),
+                    evidence,
+                    authority_of_record: "Example Signatory".into(),
+                    requester_binding: requester.clone(),
+                    conditions: Conditions {
+                        expires_at: Some(
+                            UtcInstant::parse_rfc3339("2026-01-02T00:00:00Z").unwrap(),
+                        ),
+                        purpose_limit: None,
+                        geography_limit: None,
+                    },
+                    recorded_by: requester.clone(),
+                },
+                None,
+                false,
+            )
+            .unwrap();
+        drop(store);
+
+        let gate = RecordedConsentGate::new(
+            exports.clone(),
+            "0.9.4",
+            "vendored:test",
+            std::sync::Arc::new(dev_cipher()),
+        );
+        let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
+        let err = export_product(
+            &gate,
+            &dev_cipher(),
+            &exports,
+            &request("blocked-expired", vec![square((0.0, 0.0), 0.001)]),
+            &[source],
+            &requester,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ExportError::Refused(_)));
+        assert!(err.to_string().contains("expired"));
+
+        let trail = trail(&exports);
+        let refused: Vec<_> = trail
+            .iter()
+            .filter(|r| r.action == "export.refused")
+            .collect();
+        assert_eq!(refused.len(), 1, "exactly one refusal row");
+        assert!(
+            refused[0].details["observed_at"].is_string(),
+            "the refusal row must carry the instant the expiry comparison used"
+        );
     }
 
     // === PUBLICATION FAILURE INJECTION (design §6 — every crash point) ===

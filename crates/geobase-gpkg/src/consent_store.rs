@@ -1040,6 +1040,23 @@ mod tests {
     }
 
     #[test]
+    fn superseded_only_coverage_names_supersession_as_the_reason() {
+        let dir = temp_dir("superseded-reason");
+        let s = store(&dir);
+        s.record_agreement(&agreement("v1", &["dem", "flood"]), None, false)
+            .unwrap();
+        // v2 supersedes v1 but covers a NARROWER scope: for the wider set
+        // the only covering agreement is the superseded v1.
+        s.record_agreement(&agreement("v2", &["dem"]), Some("v1"), false)
+            .unwrap();
+        let refusal = s
+            .match_agreement(&set(&["dem", "flood"]), &operator(), now())
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(refusal, MatchRefusal::Superseded("v1".into()));
+    }
+
+    #[test]
     fn wrong_requester_refuses() {
         let dir = temp_dir("requester");
         let s = store(&dir);

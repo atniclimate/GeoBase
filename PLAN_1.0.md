@@ -40,9 +40,9 @@ Concretely, for the author to tag `v1.0.0`, GeoBase must:
 
 1. **Enforce TSDF end-to-end for real.** The sovereign FPIC ceremony replaces
    `ProvisionalDevGate` at the single composition point in
-   `crates/geobase-engine-desktop/src/server.rs` `router()` (verified: the gate
-   is constructed there as `Arc::new(geobase_gpkg::ceremony::ProvisionalDevGate)`,
-   line 137, and nowhere else), at-rest encryption of T3 is live and fail-closed
+   `crates/geobase-engine-desktop/src/server.rs` `router()` *(done at B3,
+   2026-07-16: `RecordedConsentGate` is the composed gate; the provisional
+   gate is grep-proven test-only)*, at-rest encryption of T3 is live and fail-closed
    behind the shipped `AtRestCipher` seam (`crates/geobase-gpkg/src/cipher.rs`;
    default `FailClosedCipher`), the requester is authenticated, and the
    **architectural T3 egress guarantee** is proven by an adversarial egress test
@@ -126,7 +126,23 @@ oracle), and a CesiumJS heavy-3D path (Option A — documented escalation only).
 >   (`docs/THREAT-MODEL-1.2.md` §3, now tracked).
 > - **DG-3 is DEFERRED** to MB2.1 activation, by recorded decision.
 > Acceptance status is UNCHANGED: `ProvisionalDevGate` is still the only
-> composed gate; ROADMAP 1.2/1.3 stay not-accepted until B8.
+> composed gate *(true when written; superseded by the B3 note below)*;
+> ROADMAP 1.2/1.3 stay not-accepted until B8.
+
+> **Reconciliation note (2026-07-16, B3 landed — branch
+> `b3-sovereign-ceremony`).** B3 is implemented against the ratified
+> design, full scope (see the B3 checkbox below for the breakdown): the
+> **sovereign `RecordedConsentGate` is now the composed gate** at the
+> single `router()` composition point; the consent store
+> (`node-consent.gpkg`), node-witnessed export sessions, the recoverable
+> publication protocol with startup recovery, and the
+> governance-vs-infrastructure refusal split are live; the free-text
+> `requester`/`conditions` seam fields are REPLACED (the recorded
+> breaking change); the 1.3d harness/SDK/oracle/audit-verifier assert
+> the sovereign record at the B8 bar. **Acceptance status is STILL
+> unchanged:** ROADMAP 1.2/1.3 stay not-accepted; green gates are
+> engineering evidence; the single observed acceptance run happens at
+> B8, after B4/B4b/B5/B6/B7.
 
 Per tracked `docs/ROADMAP.md`, five phases are accepted-complete with observed
 gates and committed evidence: scaffold/spine (0.1), local-source 3D terrain
@@ -179,25 +195,25 @@ output == painted, no output geometry equals any source geometry) — but it is
 **not accepted-complete** and must not be accepted against the provisional gate
 (see Phase A/B sequencing).
 
-**Phase 1.2 (TSDF enforcement + ceremony)** has its seams shipped:
-`ceremony.rs` provides only `ProvisionalDevGate` (T3 refused unconditionally via
-`ExportRefused::TierNeverExports`; T0–T2 authorized for **any unverified
-requester** with `PROVISIONAL_BASIS` verbatim), and `cipher.rs` provides a
-fail-closed `AtRestCipher` seam (default `FailClosedCipher` refuses T3 at rest;
-a `DevPlaintextCipher` exists only behind `GEOBASE_DEV_UNENCRYPTED`). The
-sovereign ceremony process, real at-rest crypto, and requester authentication
-remain a handoff to the author (`docs/CEREMONY-GATE.md`, "Phase 1.2 handoff (for
-Patrick)").
+**Phase 1.2 (TSDF enforcement + ceremony)** *(updated at B3, 2026-07-16)*:
+the ceremony mechanism is now REAL — `consent_gate.rs` provides the
+sovereign `RecordedConsentGate` (composed at `router()`), backed by the
+consent store, node-witnessed sessions, and the recoverable publication
+protocol; `ProvisionalDevGate` survives only for tests. `cipher.rs` still
+provides only the fail-closed `AtRestCipher` seam (default
+`FailClosedCipher` refuses T3 at rest; `DevPlaintextCipher` exists only
+behind `GEOBASE_DEV_UNENCRYPTED`) — **real at-rest crypto is B4/B4b, and
+real requester authentication (OS-keychain credential + OS-peer-identity
+boundary) is B5**; the interim A1 token authenticates exports until then.
 
-**The dev hole, precisely** (verified in code): on an export-enabled node —
-`exports_dir` set (`GEOBASE_EXPORTS`) and a ledger cipher configured or
-`GEOBASE_DEV_UNENCRYPTED` set — every configured export route composes
-`ProvisionalDevGate` (`server.rs` `router()`, line 137), the loopback guard
-(`guard_localhost`) permits any localhost origin, and `governance-config.yaml`
-requires a confirmed FPIC boolean before T2 export that nothing currently
-collects. Any export-enabled local page can therefore drive an unauthenticated
-T2 export today. Phase A installs an interim guard as its **first** microtask
-(A1).
+**The dev hole, historically** *(closed in two steps; preserved as
+history)*: before Phase A, on an export-enabled node any local page could
+drive an unauthenticated T2 export through `ProvisionalDevGate`. A1's
+interim operator token closed the unauthenticated half (2026-07-16
+overnight); B3 closed the un-ceremonied half — T2 export now requires an
+active recorded consent agreement matched against the node-witnessed
+source set. Remaining honestly open until B5: the interim token is a
+bearer secret over loopback HTTP, not an OS-bound credential.
 
 **Tree state** *(reconciled 2026-07-11 after the Phase 0 docs commits; the
 paragraph below preserves the pre-Phase-0 baseline as history)*: local `main`
@@ -612,7 +628,7 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     RATIFIED (contract-test list in its §11; clauses 2/5 amended there);
     `docs/THREAT-MODEL-1.2.md` tracked; the DRAFT proposal superseded;
     decisions recorded in `docs/DECISIONS.md` 2026-07-16.
-- [ ] **B3 — Sovereign `CeremonyGate`.** Implement it; swap at the single
+- [x] **B3 — Sovereign `CeremonyGate`.** Implement it; swap at the single
   composition point in `server.rs` `router()`, nowhere else.
   - *Touches:* new impl in `crates/geobase-gpkg/src/ceremony.rs` (or a sibling
     module); `crates/geobase-engine-desktop/src/server.rs` `router()` (the one
@@ -621,6 +637,24 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     `grep -rn ProvisionalDevGate crates/` proves it is no longer reachable from
     any release-build composition.
   - *Deps:* B2.
+  - **Executed 2026-07-16 (branch `b3-sovereign-ceremony`), full design
+    scope:** typed schema (`geobase_gpkg::consent`, breaking seam change
+    §2.4 — free-text requester/conditions REPLACED), consent store
+    (`consent_store`, reserved `node-consent.gpkg`, event lineage §3),
+    node-witnessed export sessions (§4 — requester-supplied
+    `source_packs` structurally gone), sovereign `RecordedConsentGate`
+    (`consent_gate`, §5.1 order, floor-first proven by store-spy test),
+    governance-vs-infrastructure split (403/503, §5.3), recoverable
+    publication protocol + startup recovery + failure injection (§6),
+    §10 linearization (revalidate at publication point), constants §8.
+    Harness/SDK/oracle/audit-verifier updated same branch (sovereign
+    assertions, the B8 bar; rstep-gate label: green ≠ acceptance);
+    `record-consent` example = the LocalOperator recording path. Both
+    CONTRACT TESTs green against the sovereign gate; ProvisionalDevGate
+    grep-proven test-only. NOTE: the B8 row's "assertion flip" in
+    `verify-rstep.mjs` happened HERE by necessity (the sovereign gate is
+    composed, so provisional assertions would be false) — B8 remains the
+    single observed acceptance run + ROADMAP/PROCESS-MAP flip.
 - [ ] **B4 — Real `AtRestCipher`.** Implement the DG-2 choice behind the
   fail-closed seam; every T3-producing write path (export ledger, future
   sim/LiDAR outputs) routes through it; remove `GEOBASE_DEV_UNENCRYPTED` or

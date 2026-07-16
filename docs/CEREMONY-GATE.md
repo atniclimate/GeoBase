@@ -6,10 +6,14 @@ the only implementation until Phase 1.2. This note lists exactly what 1.2
 must implement against the trait. The ceremony *mechanism* — the sovereign
 process itself — is deliberately not designed here; that was 1.2's work and
 authority. **The mechanism design is now ratified**
-(`docs/CEREMONY-DESIGN.md`, 2026-07-16) — **implementation remains B3–B5
-and has not begun**; nothing sovereign is composed yet. Where this handoff
-note and that design differ, the design of record wins (clauses 2 and 5
-below are amended by it).
+(`docs/CEREMONY-DESIGN.md`, 2026-07-16), and **B3 has landed against it**:
+the sovereign `RecordedConsentGate`
+(`geobase_gpkg::consent_gate`) is the gate composed at the single
+`server.rs` `router()` composition point — `ProvisionalDevGate` survives
+only for tests and store-less tooling. B4 (cipher), B5 (credentials), and
+the single combined acceptance (B8) remain open: **green gates are still
+not acceptance.** Where this handoff note and that design differ, the
+design of record wins (clauses 2 and 5 below are amended by it).
 
 ## The seam as shipped (Phase 1.3)
 
@@ -24,15 +28,14 @@ pub trait CeremonyGate {
   what the product derives from), **product tier** (what the export is
   stamped), requester, optional purpose.
 - `CeremonyRecord` carries: process name, basis, authorized_by, conditions.
-  The export pipeline writes `record.audit_details(&auth)` as the
-  `export.ceremony` audit row. **Honest current-state note (2026-07-16):
-  today the `export.ceremony` and `export.t2` rows are two separate
-  appends made after the product files are already on disk — a crash
-  between them can tear the pair (a recorded defect, not a feature). The
-  recoverable publication protocol that fixes this is specified in
-  `docs/CEREMONY-DESIGN.md` §6 and lands at B3.** The RStep gate (1.3d)
-  asserts the row exists, so no export path can skip the seam and still
-  pass CI.
+  The export pipeline writes `record.audit_details(...)` as the
+  `export.ceremony` audit row. **Current state (B3, landed): the
+  `export.ceremony` and `export.t2` rows are sealed in ONE SQLite
+  transaction inside the recoverable publication protocol
+  (`docs/CEREMONY-DESIGN.md` §6) — intent → staged bundle → seal →
+  atomic rename → finalize, with startup recovery. The pre-B3 torn-pair
+  defect is closed.** The RStep gate (1.3d) asserts the full protocol
+  row sequence, so no export path can skip the seam and still pass CI.
 - `ProvisionalDevGate` authorizes T0–T2 with the basis **verbatim**:
   `"provisional — no sovereign ceremony process ran (Phase 1.2 pending)"`
   (`ceremony::PROVISIONAL_BASIS`), and **refuses T3 unconditionally** —
