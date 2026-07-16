@@ -1074,13 +1074,15 @@ Only questions still genuinely open after the decision gates above:
    (OV/EV cert, sigstore-style, or store-based), who holds the secret, and is
    macOS a 1.0 platform at all? Owner decision inside C1/C2; no default asserted
    because it has cost and identity implications outside the repo.
-2. **~~The sovereign ceremony process design itself (B2).~~ CLOSED
-   2026-07-16:** designed and ratified at the owner sitting —
-   `docs/CEREMONY-DESIGN.md` is the design of record. The one deliberately
-   open sovereign sub-question inside it: who may issue a `TribalDelegate`
-   credential (unissuable in 1.0 until the owner ratifies an issuer
-   ceremony); multi-operator key wrapping likewise stays open under DG-2's
-   ratified constraints.
+2. **The two deliberately open sovereign sub-questions from the ratified
+   B2 design** (`docs/CEREMONY-DESIGN.md`): who may issue a
+   `TribalDelegate` credential and how that authority is evidenced
+   (unissuable in 1.0 until the owner ratifies an issuer ceremony — needed
+   before any delegated-use story, not before the 1.0 tag), and
+   multi-operator key wrapping (open under DG-2's ratified constraints).
+   *(History: this slot previously held "the B2 ceremony design itself" —
+   CLOSED 2026-07-16 at the owner sitting; the design of record is
+   `docs/CEREMONY-DESIGN.md`.)*
 3. **Render-gate promotion status.** Whether `render-gate`/`node-render-gate`/
    `layer-gate` have accumulated their five consecutive green runs on `main` is
    CI history, not repo state — check before assuming C6 is a one-line change.

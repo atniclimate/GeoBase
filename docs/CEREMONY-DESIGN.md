@@ -143,11 +143,15 @@ pub struct Conditions {
 **recorded-but-advisory** in 1.0. Export-time comparison uses the node's
 UTC clock; an invalid or unavailable clock is an **infrastructure failure**
 (§5.3), never an authorization. **The exact node-clock instant used for
-the expiry comparison is recorded**: it is `FpicAuthorization.timestamp`,
-copied into `CeremonyRecord.observed_at` and thence into the
-`export.ceremony` row — the audit trail proves *which time* made the
-decision, not merely that a decision was made (asserted by the expiry
-tests, §11).
+the expiry comparison is recorded on every outcome**: the gate captures
+`observed_at` once, immediately **before** matching begins (§5.1 step 4),
+so the instant exists whether or not an authorization is ever
+constructed. On success it becomes `FpicAuthorization.timestamp`, copied
+into `CeremonyRecord.observed_at` and thence into the `export.ceremony`
+row; on a governance denial (including expiry) the **`export.refused` row
+carries the same `observed_at`** in its details. The audit trail proves
+*which time* made the decision on both paths, not merely that a decision
+was made (asserted by the expiry tests, §11).
 
 ## 3. The consent store
 
@@ -265,7 +269,8 @@ omit a contributing higher-tier pack. **B3 closes this:**
 
 - **Governance denial** — no/expired/revoked/superseded/wrong-scope/
   wrong-requester agreement, malformed evidence, unauthenticated requester:
-  `Declined { reason }`, exactly one refusal row, HTTP 403.
+  `Declined { reason }`, exactly one refusal row (carrying the
+  `observed_at` instant captured before matching, §2.5), HTTP 403.
 - **Infrastructure failure** — consent store unavailable/corrupt/
   unreadable, invalid clock, ledger failures: **HTTP 503**, no product, an
   infrastructure-failure audit row *attempted*; if the ledger itself is
@@ -412,8 +417,9 @@ must pass against the sovereign gate):
   authenticated identity; `authority_of_record` equals the store record's
   authority; conditions carried; consent-store sequence recorded;
   `observed_at` present and equal to the instant the expiry comparison
-  used (the expiry tests assert this on both the authorized and the
-  expired-refusal paths).
+  used — asserted on the `export.ceremony` row for the authorized path and
+  on the `export.refused` row for the expired-refusal path (the instant is
+  captured before matching, so it exists on both).
 
 Publication failure injection (§6): crash at every state transition;
 recovery finalizes or aborts truthfully; success response only after
