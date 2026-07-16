@@ -17,6 +17,7 @@
 pub mod ceremony;
 pub mod cipher;
 pub mod consent;
+pub mod consent_store;
 pub mod raster;
 pub mod vector;
 
