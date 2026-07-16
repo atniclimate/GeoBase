@@ -227,20 +227,26 @@ pub fn record_unauthenticated_refusal(
                        seam was never consulted)",
             // The node-clock instant this refusal was decided at (review
             // B3 F6): every governance refusal carries when it happened,
-            // even pre-gate ones. None only if the clock is implausible.
-            "observed_at": observed_at_or_none(),
+            // even pre-gate ones.
+            "observed_at": refusal_observed_at()?,
         }),
     })?;
     Ok(())
 }
 
-/// The checked node-clock instant, or `None` if the clock is implausible.
-/// Used to stamp refusal rows with when the decision was made without
-/// letting a bad clock fail the refusal itself.
-fn observed_at_or_none() -> Option<String> {
+/// The checked node-clock instant a pre-gate governance refusal was
+/// decided at. An implausible clock is an INFRASTRUCTURE failure (design
+/// §5.3, review B3 F6): the node never records a governance denial whose
+/// decision instant it cannot state — the route answers 503, not a 403
+/// with a null timestamp.
+fn refusal_observed_at() -> Result<String, ExportError> {
     geobase_gpkg::consent::UtcInstant::now()
-        .ok()
         .map(|t| t.to_rfc3339())
+        .map_err(|e| {
+            ExportError::Infrastructure(format!(
+                "node clock implausible — cannot stamp the refusal's decision instant: {e}"
+            ))
+        })
 }
 
 /// Append an `export.refused` row for a governance refusal decided BEFORE
@@ -262,7 +268,7 @@ pub fn record_declined_refusal(
         actor: requester.audit_string(),
         tsdf_version,
         tsdf_source_origin: tsdf_origin,
-        details: serde_json::json!({ "reason": reason, "observed_at": observed_at_or_none() }),
+        details: serde_json::json!({ "reason": reason, "observed_at": refusal_observed_at()? }),
     })?;
     Ok(())
 }
@@ -271,7 +277,12 @@ pub fn record_declined_refusal(
 /// authorized through `gate` against the node-witnessed `sources`,
 /// verified per the module contract, published via the recoverable
 /// protocol, audited in the ledger. On ANY failure nothing is released.
-pub fn export_product(
+///
+/// `pub(crate)` on purpose (review B3 F1a): the ONLY composition point for
+/// a ceremony gate is `server.rs::router()` — a downstream release caller
+/// must not be able to drive the export pipeline with an arbitrary
+/// (allow-all) `CeremonyGate` of its own.
+pub(crate) fn export_product(
     gate: &dyn CeremonyGate,
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
@@ -477,8 +488,11 @@ fn publish(
         "product": request.product,
         "publication_id": publication_id,
         "features": request.features.len(),
-        "source_packs": sources.iter().zip(&resolved_source_hashes).map(|(s, (_, sha))| {
-            serde_json::json!({"id": s.id, "tier": s.tier.code(), "sha256": sha})
+        // Node-authoritative re-resolved tiers (review B3 N1): the sidecar
+        // is the product's classification carrier and must agree with the
+        // sealed T2 ledger row — never the caller/boot-cached tier hint.
+        "source_packs": auth.source_packs.iter().zip(&resolved_source_hashes).map(|(p, (_, sha))| {
+            serde_json::json!({"id": p.id, "tier": p.tier.code(), "sha256": sha})
         }).collect::<Vec<_>>(),
         "files": files.iter().cloned().collect::<std::collections::BTreeMap<_, _>>(),
     });

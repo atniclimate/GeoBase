@@ -705,6 +705,20 @@ async fn api_export(
                                   at-rest cipher (fail-closed)"}),
                 None,
             ),
+            // Every other pre-gate ledger/clock/I/O failure is
+            // INFRASTRUCTURE too (design §5.3, review B3 F6) — the node is
+            // not provisioned to audit the refusal, which is a 503, never
+            // an internal error dressed as one.
+            Err(
+                err @ (ExportError::Infrastructure(_)
+                | ExportError::Ledger(_)
+                | ExportError::Io(_)
+                | ExportError::Write(_)),
+            ) => status_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"reason": format!("export refusal could not be audited: {err}")}),
+                None,
+            ),
             Err(err) => status_json(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({"reason": format!("export refusal could not be audited: {err}")}),
@@ -754,6 +768,19 @@ async fn api_export(
                     json!({"reason": "export refused (invalid session) AND the node cannot \
                                       record the refusal: T3 ledger has no configured \
                                       at-rest cipher (fail-closed)"}),
+                    None,
+                ),
+                // Pre-gate ledger/clock/I/O failures are INFRASTRUCTURE
+                // (design §5.3, review B3 F6): 503, same class as the
+                // cipher special case above.
+                Err(
+                    err @ (ExportError::Infrastructure(_)
+                    | ExportError::Ledger(_)
+                    | ExportError::Io(_)
+                    | ExportError::Write(_)),
+                ) => status_json(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"reason": format!("export refusal could not be audited: {err}")}),
                     None,
                 ),
                 Err(err) => status_json(

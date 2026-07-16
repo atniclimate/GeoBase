@@ -73,9 +73,13 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let subcommand = args.next().unwrap_or_default();
     match subcommand.as_str() {
-        "record" => cmd_record(args.collect(), false),
-        "supersede" => cmd_record(args.collect(), false),
-        "correct" => cmd_record(args.collect(), true),
+        "record" => cmd_record(args.collect(), false, false),
+        // The verb names a lifecycle act: supersede/correct MUST name at
+        // least one predecessor (review B3 N2) — a supersession of nothing
+        // silently recording a new root would misdescribe the operator's
+        // own act.
+        "supersede" => cmd_record(args.collect(), false, true),
+        "correct" => cmd_record(args.collect(), true, true),
         "revoke" => cmd_revoke(args.collect()),
         other => {
             eprintln!(
@@ -99,7 +103,7 @@ fn cmd_revoke(args: Vec<String>) {
     }
 }
 
-fn cmd_record(args: Vec<String>, correction: bool) {
+fn cmd_record(args: Vec<String>, correction: bool, require_predecessors: bool) {
     let mut args = args.into_iter();
     let (Some(exports_dir), Some(agreement_id)) = (args.next(), args.next()) else {
         fail("record: usage: record-consent <record|supersede|correct> <exports-dir> <agreement-id> ...");
@@ -139,6 +143,13 @@ fn cmd_record(args: Vec<String>, correction: bool) {
     let Some(authority) = authority else {
         fail("--authority is required (the agreement names the real authority, never the requester echo)");
     };
+    if require_predecessors && supersedes.is_empty() {
+        fail(
+            "supersede/correct require at least one --supersedes <agreement-id> — \
+             the verb names a lifecycle act against an existing record; to record \
+             a new root agreement use 'record'",
+        );
+    }
 
     let now = match UtcInstant::now() {
         Ok(now) => now,

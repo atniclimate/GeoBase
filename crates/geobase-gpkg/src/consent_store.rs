@@ -36,6 +36,20 @@
 //! supersession, and correction are later appends (correction *is*
 //! supersession); effects apply at the next authorization check —
 //! authorization results are never cached.
+//!
+//! ## Honest residual — the raw-SQL boundary (review B3 F5, B4 seals it)
+//!
+//! `GeoPackage::conn()` is public, so the store defends its own surface:
+//! append-only triggers, insert-shape triggers, no-resurrection status
+//! folding, and (for witnessed-verbal records) a proof-core commitment
+//! recomputed and enforced on the authorization read path. What a local
+//! plaintext SQLite file CANNOT prevent is a **perfectly-shaped** forgery
+//! written through raw SQL — for a `tribal_signed` record the evidence
+//! hash is the hash of an EXTERNAL document, so no local recomputation
+//! can distinguish a fabricated-but-well-formed record from a genuine
+//! one. That residual is inherent to the storage medium, not to this
+//! schema; B4 (sealed/encrypted store) closes the raw-write channel
+//! itself.
 
 use std::path::{Path, PathBuf};
 
@@ -415,43 +429,40 @@ impl ConsentStore {
             .to_rfc3339();
 
         // Proof-core vs evidence-detail split (§3.2/§9).
-        let (evidence_hash, acknowledged_at, document_ref, witnesses, attestation) = match &record
-            .evidence
-        {
-            ConsentBasis::SignedAgreement {
-                document_ref,
-                document_hash,
-                acknowledged_at,
-            } => (
-                Some(document_hash.to_hex()),
-                Some(acknowledged_at.to_rfc3339()),
-                Some(document_ref.clone()),
-                None,
-                None,
-            ),
-            ConsentBasis::WitnessedVerbal {
-                witnesses,
-                verification_attestation,
-            } => {
-                let witnesses_json = serde_json::to_string(
-                    &witnesses.iter().map(Witness::as_str).collect::<Vec<_>>(),
-                )
-                .map_err(GpkgError::from)?;
-                // §9 proof-core: commit a hash over the canonical
-                // witnessed detail so a future compaction that removes
-                // the identifying detail still proves what was carried.
-                let commitment =
-                    format!("witnessed-verbal-v1\n{witnesses_json}\n{verification_attestation}");
-                let hash = Sha256Digest::of_bytes(commitment.as_bytes()).to_hex();
-                (
-                    Some(hash),
+        let (evidence_hash, acknowledged_at, document_ref, witnesses, attestation) =
+            match &record.evidence {
+                ConsentBasis::SignedAgreement {
+                    document_ref,
+                    document_hash,
+                    acknowledged_at,
+                } => (
+                    Some(document_hash.to_hex()),
+                    Some(acknowledged_at.to_rfc3339()),
+                    Some(document_ref.clone()),
                     None,
                     None,
-                    Some(witnesses_json),
-                    Some(verification_attestation.clone()),
-                )
-            }
-        };
+                ),
+                ConsentBasis::WitnessedVerbal {
+                    witnesses,
+                    verification_attestation,
+                } => {
+                    let witnesses_json = serde_json::to_string(
+                        &witnesses.iter().map(Witness::as_str).collect::<Vec<_>>(),
+                    )
+                    .map_err(GpkgError::from)?;
+                    // §9 proof-core: commit a hash over the canonical
+                    // witnessed detail so a future compaction that removes
+                    // the identifying detail still proves what was carried.
+                    let hash = witnessed_commitment_hex(&witnesses_json, verification_attestation);
+                    (
+                        Some(hash),
+                        None,
+                        None,
+                        Some(witnesses_json),
+                        Some(verification_attestation.clone()),
+                    )
+                }
+            };
 
         let source_scope_json =
             serde_json::to_string(&record.source_scope).map_err(GpkgError::from)?;
@@ -737,7 +748,15 @@ fn fold_statuses(
     for (subject, kind, related) in events {
         match kind.as_str() {
             "recorded" => {
-                statuses.insert(subject.clone(), AgreementStatus::Active);
+                // A `recorded` event ACTIVATES a subject only if the subject
+                // has no status yet. The honest writer emits exactly one
+                // `recorded` per agreement, first; a later `recorded` for the
+                // same subject (only reachable through raw SQL) must never
+                // un-revoke or un-supersede it (review B3 F5 — no
+                // resurrection by replay).
+                statuses
+                    .entry(subject.clone())
+                    .or_insert(AgreementStatus::Active);
                 if let Some(predecessor) = related {
                     statuses
                         .entry(predecessor)
@@ -861,6 +880,24 @@ fn rebuild_evidence(row: &StoredAgreement, now: UtcInstant) -> Result<ConsentBas
                 .verification_attestation
                 .as_deref()
                 .ok_or("missing verification_attestation")?;
+            // §9 binding, enforced on the authorization READ path (review
+            // B3 F8): the retained proof-core hash must equal the
+            // commitment recomputed over the stored detail. A record whose
+            // hash does not bind its detail — a raw-SQL forgery with a
+            // plausible 64-hex hash, or detail edited out from under the
+            // hash — never authorizes.
+            let stored_hash = row
+                .evidence_hash
+                .as_deref()
+                .ok_or("missing evidence_hash")?;
+            let recomputed = witnessed_commitment_hex(witnesses_json, attestation);
+            if stored_hash != recomputed {
+                return Err(
+                    "evidence_hash does not match the witnessed-verbal commitment recomputed \
+                     over the stored detail — the proof-core hash must bind the evidence"
+                        .into(),
+                );
+            }
             let names: Vec<String> =
                 serde_json::from_str(witnesses_json).map_err(|e| e.to_string())?;
             let witnesses = names
@@ -891,6 +928,15 @@ fn rebuild_conditions(row: &StoredAgreement) -> Result<Conditions, ConsentStoreE
         purpose_limit: row.purpose_limit.clone(),
         geography_limit: row.geography_limit.clone(),
     })
+}
+
+/// The §9 witnessed-verbal proof-core commitment: a domain-separated hash
+/// over the stored witnesses serialization + attestation. ONE definition,
+/// used by the writer (to retain) and by the authorization read path (to
+/// enforce — review B3 F8).
+fn witnessed_commitment_hex(witnesses_json: &str, attestation: &str) -> String {
+    let commitment = format!("witnessed-verbal-v1\n{witnesses_json}\n{attestation}");
+    Sha256Digest::of_bytes(commitment.as_bytes()).to_hex()
 }
 
 /// An unforgeable event id from the OS CSPRNG.
@@ -1343,6 +1389,102 @@ mod tests {
             thin_evidence.is_err(),
             "empty evidence for a signed agreement must be refused"
         );
+    }
+
+    /// Review B3 F5 (resurrection): a raw-SQL `recorded` event appended
+    /// AFTER a revocation must not restore the agreement to Active — the
+    /// insert trigger allows it (the agreement genuinely has proof and
+    /// evidence), so the status fold itself must refuse to resurrect.
+    #[test]
+    fn forged_recorded_replay_after_revoke_does_not_resurrect() {
+        let dir = temp_dir("replay");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
+            .unwrap();
+        s.revoke("a1", &operator()).unwrap();
+        let gpkg = GeoPackage::open(&s.path()).unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at) \
+                 VALUES ('feedc0de', 'a1', 'recorded', '2026-07-16T01:00:00Z')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            s.statuses().unwrap()["a1"],
+            AgreementStatus::Revoked,
+            "a recorded replay must never un-revoke"
+        );
+        let refusal = s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(refusal, MatchRefusal::Revoked("a1".into()));
+    }
+
+    /// Review B3 F5/F8: a WELL-SHAPED raw-SQL forgery — plausible operator
+    /// string, 64-hex proof hash, non-thin evidence — passes every insert
+    /// trigger, but for a witnessed-verbal record the authorization read
+    /// path recomputes the §9 commitment over the stored detail and
+    /// refuses on mismatch. (The equivalent signed-kind forgery is the
+    /// documented raw-SQL residual — its hash binds an EXTERNAL document
+    /// no local recomputation can check; B4 seals the channel.)
+    #[test]
+    fn well_shaped_witnessed_forgery_refuses_on_commitment_mismatch() {
+        let dir = temp_dir("wellshaped");
+        let s = store(&dir);
+        let gpkg = GeoPackage::open(&s.path()).unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_agreements (agreement_id, kind, source_scope, \
+                 product_class, product_tier, authority_of_record, requester_binding, \
+                 evidence_hash, recorded_by) \
+                 VALUES ('forged', 'individual_witnessed', '[\"forged-pack\"]', \
+                 'painted-opportunity-shapefile', 'T2', 'Fabricated Authority', ?1, ?2, \
+                 'local-operator:forged')",
+                rusqlite::params![operator().audit_string(), "ab".repeat(32)],
+            )
+            .unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_evidence (agreement_id, witnesses, \
+                 verification_attestation) \
+                 VALUES ('forged', '[\"Fake Witness A\",\"Fake Witness B\"]', \
+                 'fabricated attestation text')",
+                [],
+            )
+            .unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at) \
+                 VALUES ('f0f0f0f0', 'forged', 'recorded', '2026-07-16T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        let refusal = s
+            .match_agreement(
+                &set(&["forged-pack"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .unwrap_err();
+        match refusal {
+            MatchRefusal::EvidenceIncomplete(id, reason) => {
+                assert_eq!(id, "forged");
+                assert!(
+                    reason.contains("commitment"),
+                    "the refusal must name the commitment mismatch: {reason}"
+                );
+            }
+            other => panic!("expected EvidenceIncomplete on commitment mismatch, got: {other:?}"),
+        }
     }
 
     /// A store-side record whose evidence became unreadable AFTER a valid

@@ -119,10 +119,12 @@ impl SessionRegistry {
         let mut sessions = self.sessions.lock().map_err(|_| SessionError::Poisoned)?;
         match sessions.get(session_id) {
             Some(record) if record.owner != owner => Err(SessionError::WrongOwner),
-            Some(_) => {
-                let record = sessions.remove(session_id).expect("checked present above");
-                Ok(record.packs.into_iter().collect())
-            }
+            // Total match on the request path (review B3 F10): removal is
+            // re-checked, never assumed — no panic can reach a handler.
+            Some(_) => match sessions.remove(session_id) {
+                Some(record) => Ok(record.packs.into_iter().collect()),
+                None => Err(SessionError::Unknown),
+            },
             None => Err(SessionError::Unknown),
         }
     }
