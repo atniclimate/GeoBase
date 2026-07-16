@@ -105,6 +105,12 @@ most restrictive (`geobase-core::LayerPackage::effective_tier` rule via
 The chain, every step observable:
 1. `POST /api/export` (server.rs) — first mutating endpoint: 503
    without `exports_dir`, 404 unknown source pack, 400 invalid.
+   **Interim operator guard (Phase A, A1):** an operator-held token
+   (`x-geobase-export-token`; `GEOBASE_EXPORT_TOKEN` or boot-generated)
+   is required *before* the ceremony seam runs — missing/wrong → 403 +
+   `export.refused` audit row; exports enabled with no token → 503
+   (fail-closed misconfiguration). Provisional by design: replaced by
+   real requester authentication in Phase B (B5).
 2. **CeremonyGate seam** (`crates/geobase-gpkg/src/ceremony.rs`):
    every export authorized BEFORE any file is written.
    `ProvisionalDevGate` (the only impl until Phase 1.2) refuses T3

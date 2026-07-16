@@ -162,6 +162,38 @@ pub enum ExportError {
     Io(#[from] std::io::Error),
 }
 
+/// Append an `export.refused` audit row for a request that failed the
+/// interim operator token guard (Phase A, A1) — refused BEFORE the
+/// ceremony seam ran, so no ceremony record exists and none is implied.
+/// Same ledger, same fail-closed posture as every other T3 write: a node
+/// with no configured cipher refuses to write this row (the caller
+/// tolerates exactly that refusal — such a node cannot export at all).
+pub fn record_token_refusal(
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+    product: &str,
+    requester: &str,
+    source_packs: &[String],
+    purpose: Option<&str>,
+) -> Result<(), ExportError> {
+    let (tsdf_version, tsdf_origin) = tsdf_info()?;
+    let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: product.to_string(),
+        action: "export.refused".into(),
+        actor: requester.to_string(),
+        tsdf_version,
+        tsdf_source_origin: tsdf_origin,
+        details: serde_json::json!({
+            "reason": "missing or invalid export token (interim operator \
+                       guard — Phase A A1; the ceremony seam was never consulted)",
+            "source_packs": source_packs,
+            "purpose": purpose,
+        }),
+    })?;
+    Ok(())
+}
+
 /// Export `request` as a T2 product shapefile into `exports_dir`,
 /// authorized through `gate`, verified per the module contract, audited
 /// in the ledger. On ANY failure nothing is released: partial outputs

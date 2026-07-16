@@ -22,6 +22,10 @@ serde.workspace = true
 serde_json.workspace = true
 geozero = { version = "0.14.0", default-features = false, features = ["with-wkb", "with-geojson"] }
 sha2 = "0.10.9"
+# OS CSPRNG for the interim operator export token (Phase A, A1). Already in
+# the dependency tree transitively; pinned here as a direct, auditable dep.
+# `std` so its Error is a std::error::Error (binaries `?` it at boot).
+getrandom = { version = "0.3", features = ["std"] }
 geo = { version = "0.29", default-features = false }
 geo-types = "0.7.19"
 tauri = { version = "2", optional = true }
