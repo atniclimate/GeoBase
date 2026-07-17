@@ -42,7 +42,7 @@ project:
     - Owner-reserved acts (acceptance flips, DG ratifications, scope changes,
       PR merges) stop and ask Patrick
     - AGENTS.md data gate governs agent context; adversarial reviews land
-      only in the workspace-local `_reviews/` archive (one level above this
+      only in `../_reviews/` (the workspace review archive, outside this
       repo, never tracked here); offload agents never push to remotes
     - Green gates are engineering evidence, never acceptance
   assumptions:
@@ -128,7 +128,7 @@ phases:
               BEFORE any implementation code.
             status: not_started
             dependencies: [TASK-B4.1]
-            evidence_required: ["tracked spec doc", "Codex review verdict in the workspace-local _reviews/geobase/ archive (outside this repo)"]
+            evidence_required: ["tracked spec doc", "Codex review verdict in ../_reviews/geobase/ (workspace review archive, outside this repo)"]
             done_when: ["spec review passes with no BLOCK", "golden-vector byte layout frozen"]
             recommended_agent: "director drafts; Codex adversary reviews"
           - id: TASK-B4.2-CORE
@@ -220,7 +220,7 @@ risks:
     detection: "test suite; review lanes check claim language"
   - id: RISK-003
     description: "Gitignored/local material leaking into Codex prompts (sovereignty data gate)"
-    mitigation: "AGENTS.md contract; director-level gate; reviews land only in the workspace-local _reviews/ archive (outside this repo)"
+    mitigation: "AGENTS.md contract; director-level gate; reviews land only in ../_reviews/ (workspace review archive, outside this repo)"
     detection: "prompt review before every Codex invocation"
 
 resume:
@@ -231,7 +231,7 @@ resume:
   pending_decision_gates: []   # none block B4.2; DG-B5-RECEIPTS blocks B5 later
   required_reading:
     - docs/handoffs/b4-next-session-prompt.md   # local-only B4 playbook (gitignored)
-    - _reviews/geobase/2026-07-16_b4-roadmap-agreed.md   # agreed B4 plan (workspace-local archive one level above this repo; never tracked)
+    - ../_reviews/geobase/2026-07-16_b4-roadmap-agreed.md   # agreed B4 plan; `../` = workspace review archive, outside this repo, never tracked
     - docs/DECISIONS.md   # 2026-07-16 entries, esp. B4.1 receipts
     - docs/CEREMONY-DESIGN.md
     - docs/THREAT-MODEL-1.2.md
