@@ -77,10 +77,15 @@
 //!      "purpose": "<text, optional>", "features": [...] }`
 //! The source set is the session's node-witnessed record; identity is
 //! the authenticated operator (interim A1 token until B5). Statuses:
-//! 400 invalid, 403 governance refusal, 404 unknown session pack (cannot
-//! happen — witnessed packs resolve or floor-refuse), 409 exists,
-//! 503 infrastructure/fail-closed. Success is T2-stamped, fully audited,
-//! and returned only after publication finalizes.
+//! schema-free 400 for a malformed body (before auth, no row) or an
+//! invalid authenticated request; a UNIFORM generic 403 for any
+//! pre-authentication refusal (invalid session / T3 floor / bad token —
+//! the distinct cause goes only to the protected ledger); 403 for a
+//! ceremony governance refusal; 409 name-exists (authenticated preflight,
+//! session not consumed); 503 infrastructure/fail-closed. There is NO
+//! unknown-pack 404 — the source set is the node's own session record,
+//! never a request-named pack. Success is T2-stamped, fully audited, and
+//! returned only after publication finalizes.
 
 use std::path::{Path, PathBuf};
 

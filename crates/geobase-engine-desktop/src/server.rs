@@ -780,19 +780,29 @@ fn preauth_refusal_response(
     }
 }
 
-/// The first mutating endpoint. Contract in `export.rs` module docs:
-/// loopback-guarded like everything else, 503 without an exports dir,
-/// 404 unknown source pack, 403 on ceremony refusal (the seam enforces
-/// the T3 floor), 400 invalid, 409 exists; success is T2-stamped and
-/// fully audited before the response returns. Route order is the
-/// ratified design §5.1: session → floor → authenticate → ceremony.
+/// The first mutating endpoint. Contract in `export.rs` module docs.
+/// Executable order is the ratified design §5.1 (review B3-r3 F4 +
+/// post-merge F2/F4/F5/F7):
+///   structural parse → read-only session resolve + node-derived tier →
+///   T3 floor → authenticate → authenticated request/output preflight →
+///   consume the session once → ceremony/publication.
+/// Responses: 503 without an exports dir or with an unauditable pre-gate
+/// failure; a schema-free 400 for a malformed body (before auth, no row);
+/// a UNIFORM generic 403 for any pre-authentication refusal (invalid
+/// session / T3 floor / bad token — the distinct cause goes only to the
+/// protected ledger); 400 invalid request or 409 name-exists on the
+/// authenticated preflight (neither consumes the session); 403 on a
+/// ceremony refusal; success is T2-stamped and fully audited before the
+/// response returns. There is no unknown-source-pack 404: the source set
+/// is the node's own session record, never a request-named pack.
 async fn api_export(
     State(state): State<ServerState>,
     headers: HeaderMap,
-    // Raw bytes, NOT `Json<Value>` (review H1): the JSON extractor would run
-    // before this handler and reject a malformed body with 400 *before* the
-    // token guard. Taking the body as bytes lets the guard authenticate
-    // first; parsing happens only after a valid token.
+    // Raw bytes, NOT `Json<Value>`: the JSON extractor would reject a
+    // malformed body with axum's own 400 before this handler runs. Taking
+    // the body as bytes lets the handler own the parse — returning a
+    // schema-free 400 (F5) and keeping the ratified §5.1 order, in which
+    // the structural parse precedes session resolution and the token check.
     body: axum::body::Bytes,
 ) -> Response {
     use crate::export::{export_product, ExportError, ExportRequest, PaintedFeature, SourcePack};
@@ -830,10 +840,17 @@ async fn api_export(
     // H1's audit posture, preserved under the ratified floor-first order).
     let parsed: ExportBody = match serde_json::from_slice(&body) {
         Ok(parsed) => parsed,
-        Err(err) => {
+        // SCHEMA-FREE 400 (review B3 post-merge F5, owner receipt B): the
+        // serde detail is DISCARDED so an unauthenticated caller cannot
+        // enumerate the request schema (`deny_unknown_fields` echoes
+        // "unknown field `x`, expected one of …"). A structural parse
+        // failure precedes §5.1 session resolution/floor/auth, so it stays
+        // outside the governance-refusal audit taxonomy: still 400, still
+        // no ledger row. `deny_unknown_fields` is retained.
+        Err(_) => {
             return status_json(
                 StatusCode::BAD_REQUEST,
-                json!({"reason": format!("invalid export request: {err}")}),
+                json!({"reason": "invalid export request"}),
                 None,
             );
         }
@@ -3728,32 +3745,60 @@ mod tests {
         assert!(!exports.join(format!("{id}.shp")).exists());
     }
 
-    /// [Ratified §5.1 order, review B3-r3 F4] Malformed JSON is a 400 from
-    /// the STRUCTURAL parse — which now precedes authentication, because
-    /// the session must resolve before the floor and the floor before the
-    /// token (§5.1 steps 1–3). Review H1's actual invariant is preserved
-    /// differently: nothing request-controlled reaches the audit trail
-    /// before authentication (generic rows only), and a parse failure
-    /// writes NO row at all.
+    /// Review B3 post-merge F5 (owner receipt B): a malformed body — invalid
+    /// JSON OR a valid object with an unknown field — returns a FIXED,
+    /// schema-free 400 that echoes no accepted field names, no supplied
+    /// values, and no serde detail, and writes NO ledger row (a structural
+    /// parse precedes §5.1 session resolution, so it is outside the
+    /// governance-refusal audit taxonomy). An already-open session is
+    /// untouched. `deny_unknown_fields` is retained (the unknown-field body
+    /// still 400s — it just no longer leaks the schema).
     #[tokio::test]
-    async fn malformed_body_without_token_is_a_parse_400_with_no_audit_row() {
-        let (app, exports, _id) = export_guard_fixture("a1-malformed", Some("secret-token"));
-        let response = app
-            .oneshot(
-                Request::post("/api/export")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from("{ this is not json"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        // 400 (structural parse), and no ledger row was written — there is
-        // no refusal to attribute and nothing trusted to record.
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            !exports.join("node-audit.gpkg").exists(),
-            "a parse failure writes no audit row"
-        );
+    async fn malformed_body_is_schema_free_and_does_not_enter_authorization() {
+        let (app, exports, id) = export_guard_fixture("f5-malformed", Some("secret-token"));
+        // An open session to prove it is not disturbed by a malformed probe.
+        let session = witnessed_session(&app, "secret-token", &id).await;
+
+        let bodies = [
+            "{ this is not json".to_string(),
+            // Valid JSON, unknown field — deny_unknown_fields rejects it,
+            // but the schema must NOT leak. Includes a sentinel value.
+            json!({"produkt": "SENTINEL-VALUE", "session": session}).to_string(),
+        ];
+        for raw in bodies {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/api/export")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(raw.clone()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{raw}");
+            let reason = json_response(response).await["reason"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(reason, "invalid export request", "fixed schema-free reason");
+            // No accepted field names, supplied values, or sentinel leak.
+            for leak in [
+                "product",
+                "features",
+                "purpose",
+                "expected one of",
+                "SENTINEL-VALUE",
+            ] {
+                assert!(!reason.contains(leak), "reason leaked '{leak}': {reason}");
+            }
+            // No ledger/consent/product/staging artifact from a parse fail.
+            assert!(!exports.join("node-audit.gpkg").exists());
+            assert!(!exports.join("node-consent.gpkg").exists());
+            assert!(!exports.join(".staging").exists());
+        }
+        // The open session survived every malformed probe.
+        assert!(session_survived(&app, "secret-token", &session).await);
     }
 
     #[test]
