@@ -401,6 +401,19 @@ impl ConsentStore {
                 "source_scope must be a non-empty set of pack ids".into(),
             ));
         }
+        // Pack ids are stored and matched EXACTLY (catalog identity is the
+        // raw file stem — vault.rs). A whitespace-padded id would be stored
+        // padded and never match the gate's exact coverage check (silent
+        // non-authorization). Refuse it loudly rather than trim: no ratified
+        // pack-id grammar says surrounding whitespace is non-identity
+        // padding, and canonicalizing here could broaden or redirect
+        // authority (review B3 post-merge T-A).
+        if let Some(padded) = record.source_scope.iter().find(|s| s.as_str() != s.trim()) {
+            return Err(ConsentStoreError::InvalidRecord(format!(
+                "source_scope id '{padded}' has surrounding whitespace — pack ids are matched \
+                 exactly; record the id without padding"
+            )));
+        }
         if record.authority_of_record.trim().is_empty() {
             return Err(ConsentStoreError::InvalidRecord(
                 "authority_of_record must be non-empty (the anti-echo property lives here)".into(),
@@ -503,31 +516,47 @@ impl ConsentStore {
             .conn()
             .unchecked_transaction()
             .map_err(GpkgError::from)?;
-        tx.execute(
-            "INSERT INTO consent_agreements (agreement_id, kind, source_scope, product_class, \
-             product_tier, authority_of_record, requester_binding, expires_at, purpose_limit, \
-             geography_limit, evidence_hash, acknowledged_at, recorded_by) \
-             VALUES (?1, ?2, ?3, ?4, 'T2', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            rusqlite::params![
-                id,
-                record.kind.code(),
-                source_scope_json,
-                record.product_class.trim(),
-                record.authority_of_record.trim(),
-                record.requester_binding.audit_string(),
-                record
-                    .conditions
-                    .expires_at
-                    .as_ref()
-                    .map(UtcInstant::to_rfc3339),
-                record.conditions.purpose_limit,
-                record.conditions.geography_limit,
-                evidence_hash,
-                acknowledged_at,
-                record.recorded_by.audit_string(),
-            ],
-        )
-        .map_err(GpkgError::from)?;
+        // A duplicate agreement_id is an OPERATOR INPUT error, not an
+        // infrastructure fault: classify it as `InvalidRecord` (refused
+        // write), never `Store` ("store unavailable"). `ON CONFLICT DO
+        // NOTHING` + affected-row check is race-safe (no TOCTOU window a
+        // select-before-insert would open) and narrow — only the named
+        // primary-key conflict is reclassified; locks, I/O, other
+        // constraints, and corruption stay infrastructure (review B3
+        // post-merge F6). Refuse BEFORE the evidence/event inserts.
+        let inserted = tx
+            .execute(
+                "INSERT INTO consent_agreements (agreement_id, kind, source_scope, product_class, \
+                 product_tier, authority_of_record, requester_binding, expires_at, purpose_limit, \
+                 geography_limit, evidence_hash, acknowledged_at, recorded_by) \
+                 VALUES (?1, ?2, ?3, ?4, 'T2', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+                 ON CONFLICT(agreement_id) DO NOTHING",
+                rusqlite::params![
+                    id,
+                    record.kind.code(),
+                    source_scope_json,
+                    record.product_class.trim(),
+                    record.authority_of_record.trim(),
+                    record.requester_binding.audit_string(),
+                    record
+                        .conditions
+                        .expires_at
+                        .as_ref()
+                        .map(UtcInstant::to_rfc3339),
+                    record.conditions.purpose_limit,
+                    record.conditions.geography_limit,
+                    evidence_hash,
+                    acknowledged_at,
+                    record.recorded_by.audit_string(),
+                ],
+            )
+            .map_err(GpkgError::from)?;
+        if inserted == 0 {
+            return Err(ConsentStoreError::InvalidRecord(format!(
+                "agreement_id '{id}' already exists — recording is append-only; supersede or \
+                 correct the existing agreement instead of re-recording its id"
+            )));
+        }
         tx.execute(
             "INSERT INTO consent_evidence (agreement_id, document_ref, witnesses, \
              verification_attestation) VALUES (?1, ?2, ?3, ?4)",
@@ -711,10 +740,17 @@ impl ConsentStore {
             }
         }
 
-        // 4. Multiplicity BEFORE requester (review B3 F7): more than one
+        // 4. Multiplicity BEFORE requester AND before product class
+        //    (review B3 F7; disposition B3 post-merge T-B): more than one
         //    active, unexpired agreement fully covering the set is
-        //    ambiguous — refuse regardless of requester binding until the
-        //    operator records the lineage relationship. No unions.
+        //    ambiguous — refuse regardless of requester binding OR product
+        //    class until the operator records the lineage relationship.
+        //    This is deliberate: design §5.2 says independent duplicate
+        //    coverage refuses until related, and the ratified §5.1 order
+        //    evaluates multiplicity on the covering active-head set as a
+        //    whole. Two heads that differ ONLY in product class are still
+        //    two independent covering heads — filtering by class here would
+        //    be an availability-expanding governance change, not a fix.
         let head = match unexpired.len() {
             0 => return Ok(Err(near_miss.unwrap_or(MatchRefusal::NoAgreement))),
             1 => unexpired[0],
@@ -1243,6 +1279,133 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(matched.agreement_id, "a3");
+    }
+
+    // Row counts across the three consent tables — for "appends nothing"
+    // assertions on refused writes (review B3 post-merge F6/T-A).
+    fn table_counts(s: &ConsentStore) -> (i64, i64, i64) {
+        let gpkg = GeoPackage::open(&s.path()).unwrap();
+        let c = |t: &str| -> i64 {
+            gpkg.conn()
+                .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        (
+            c("consent_agreements"),
+            c("consent_evidence"),
+            c("consent_events"),
+        )
+    }
+
+    /// Review B3 post-merge F6: re-recording an existing agreement_id is an
+    /// operator INPUT error (`InvalidRecord`), never an infrastructure fault
+    /// (`Store` / "store unavailable"), and it appends NOTHING — no evidence
+    /// or event row leaks from the aborted transaction.
+    #[test]
+    fn duplicate_agreement_id_is_invalid_record_and_appends_nothing() {
+        let dir = temp_dir("dup-id");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a1", &["dem"]), &[], false)
+            .unwrap();
+        let before = table_counts(&s);
+        let seq_before = s.head_sequence().unwrap();
+
+        let err = s
+            .record_agreement(&agreement("a1", &["dem", "landcover"]), &[], false)
+            .unwrap_err();
+        match err {
+            ConsentStoreError::InvalidRecord(msg) => {
+                assert!(msg.contains("already exists"), "{msg}");
+            }
+            other => panic!("expected InvalidRecord for a duplicate id, got: {other:?}"),
+        }
+        assert_eq!(
+            table_counts(&s),
+            before,
+            "a refused duplicate appends nothing"
+        );
+        assert_eq!(s.head_sequence().unwrap(), seq_before);
+        // The original is intact and still authorizes.
+        assert!(s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now()
+            )
+            .unwrap()
+            .is_ok());
+    }
+
+    /// Review B3 post-merge T-A: a whitespace-padded source id is refused
+    /// (`InvalidRecord`) rather than silently stored padded — pack ids are
+    /// matched exactly, so storing padding would be silent non-authorization.
+    /// The exact id records and matches normally.
+    #[test]
+    fn padded_source_scope_is_invalid_and_appends_nothing() {
+        let dir = temp_dir("padded-scope");
+        let s = store(&dir);
+        let before = table_counts(&s);
+
+        let err = s
+            .record_agreement(&agreement("a-pad", &[" dem "]), &[], false)
+            .unwrap_err();
+        assert!(
+            matches!(err, ConsentStoreError::InvalidRecord(ref m) if m.contains("whitespace")),
+            "expected InvalidRecord naming whitespace, got: {err:?}"
+        );
+        assert_eq!(
+            table_counts(&s),
+            before,
+            "a refused padded id appends nothing"
+        );
+
+        // The exact (unpadded) id records and matches.
+        s.record_agreement(&agreement("a-exact", &["dem"]), &[], false)
+            .unwrap();
+        assert!(s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now()
+            )
+            .unwrap()
+            .is_ok());
+    }
+
+    /// Review B3 post-merge T-B (regression pin, NOT a behavior change):
+    /// two active, unexpired, same-scope agreements that differ ONLY in
+    /// product class are still two independent covering heads —
+    /// multiplicity refuses them as `DuplicateCoverage` BEFORE product class
+    /// is considered. This is the ratified §5.2 independent-duplicate rule;
+    /// filtering by class here would be an availability-expanding governance
+    /// change. Pinned so a future "optimization" cannot silently expand it.
+    #[test]
+    fn different_product_classes_still_count_as_duplicate_source_coverage() {
+        let dir = temp_dir("dup-class");
+        let s = store(&dir);
+        s.record_agreement(&agreement("a-classA", &["dem"]), &[], false)
+            .unwrap();
+        let mut other_class = agreement("a-classB", &["dem"]);
+        other_class.product_class = "some-other-product-class".into();
+        s.record_agreement(&other_class, &[], false).unwrap();
+
+        // Matching EITHER class still refuses as duplicate coverage — the
+        // ambiguity is over the covering active-head set, not the class.
+        let refusal = s
+            .match_agreement(
+                &set(&["dem"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(refusal, MatchRefusal::DuplicateCoverage(_)),
+            "two heads differing only in product class are still duplicate coverage: {refusal:?}"
+        );
     }
 
     #[test]

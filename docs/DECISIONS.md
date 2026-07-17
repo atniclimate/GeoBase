@@ -694,3 +694,49 @@ candidates. Remaining owner items from the assessment (#8–14:
 attestation posture, TribalDelegate issuance, signing profiles, release
 signing, federation trust, T2 exchange) queue for the B4/B5 design
 sitting.
+
+## 2026-07-16 — B3 post-merge review: F4/F5 owner receipts (owner acts)
+
+**Trigger:** a multi-agent /code-review of the merged B3 diff
+(`c0f2f3d..9f38281`) surfaced two Tier-2 decisions — consequences of the
+ratified §5.1 export order — and a Codex-sol remediation swarm
+(propose → deliberate → converge;
+`C:\dev\_reviews\geobase\2026-07-16_b3-postmerge-remediation-pathway.md`)
+framed each with options + a recommended default.
+
+**F4 — pre-authentication 403 disclosure — RECEIPT: Option B.** The export
+route's three distinguishable pre-auth 403 reasons (invalid-session /
+T3-floor / bad-token) let a tokenless loopback caller holding a session id
+learn session liveness and whether the witnessed source set is T3 vs
+exportable. Resolution: **one uniform public refusal** (and uniform
+audit-failure 503 text) across all three pre-auth branches; the detailed,
+content-free node-derived cause still lands in the protected local ledger.
+The authenticated consume-race branch stays diagnostic. Unanimous swarm
+consensus; smallest boundary fix preserving the ratified order. SDK
+lifecycle logic must never parse refusal reason strings. (The remaining
+serve-route session-liveness oracle is B5 scope, not closed here.)
+
+**F5 — malformed tokenless body schema echo — RECEIPT: Option B.** A
+malformed export body returned a 400 echoing the full request schema
+(serde "unknown field, expected one of …") and wrote no audit row.
+Resolution: **fixed schema-free `"invalid export request"` 400, no row**;
+`deny_unknown_fields` retained. A serde parse failure is structural and
+precedes §5.1 session resolution/floor/auth, so it stays outside the
+governance-refusal audit taxonomy. Recorded dissent (sovereignty lens +
+original proposal preferred a generic `export.refused` row on the
+release-level "complete audit trail" basis); rejected for now because it
+would create synchronous T3 writes for arbitrary malformed loopback bytes,
+overload a governance action with a transport parse failure, flip 400→503
+under audit outage, and needs its own ratified action/retention semantics.
+If durable malformed-transport auditing is wanted, design it after the B5
+OS-peer boundary rather than overloading `export.refused` now.
+
+**Remediation:** branch `fix/b3-postmerge-remediation` lands F1, F2,
+F4(B), F5(B), F6, F7, F8, T-A, and a T-B regression pin. **F3 downgraded**
+to a diagnostic-only startup message — mandatory pre-bind publication
+recovery (CEREMONY-DESIGN §6) is an invariant; catch-and-continue would
+serve with unresolved publication truth, so the real fix (encrypted
+open/unlock/recovery + `UNENCRYPTED-DEV` re-record) defers to B4. **T-B
+refuted** — the current global multiplicity-before-product-class order
+implements the ratified §5.2 independent-duplicate-coverage rule; it gets a
+regression pin, not a change.

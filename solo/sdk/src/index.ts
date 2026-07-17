@@ -156,6 +156,10 @@ export class NodeClient {
   readonly baseUrl: string;
   private readonly exportToken?: string;
   private activeSession?: string;
+  // Monotonic issuance epoch (review B3 post-merge remediation-review
+  // MAJOR): only the LATEST beginSession may assign activeSession, so a
+  // delayed older issuance response cannot overwrite a newer session.
+  private sessionEpoch = 0;
 
   constructor(baseUrl: string, options?: NodeClientOptions) {
     const parsed = new URL(baseUrl);
@@ -190,6 +194,7 @@ export class NodeClient {
     if (this.exportToken !== undefined) {
       headers["x-geobase-export-token"] = this.exportToken;
     }
+    const epoch = ++this.sessionEpoch;
     const body = await this.requestObject<{ session: string }>("/api/sessions", {
       method: "POST",
       headers,
@@ -197,7 +202,13 @@ export class NodeClient {
     if (typeof body.session !== "string" || body.session === "") {
       throw new Error("node did not return a session id");
     }
-    this.activeSession = body.session;
+    // Only assign if this is still the latest lifecycle transition — a
+    // delayed response must never clobber a fresher session OR re-assign a
+    // session an interleaving export has since consumed (both advance
+    // `sessionEpoch`). The caller still gets its own issued id.
+    if (epoch === this.sessionEpoch) {
+      this.activeSession = body.session;
+    }
     return body.session;
   }
 
@@ -220,8 +231,16 @@ export class NodeClient {
    *  409 exists, 503 infrastructure) reject with `NodeRequestError`
    *  carrying the server's reason. The session defaults to the client's
    *  active one; the export token is passed explicitly here — and only
-   *  here; read endpoints never send it. */
-  exportProduct(body: ExportRequestBody): Promise<ExportOutcome> {
+   *  here; read endpoints never send it.
+   *
+   *  Sessions are SINGLE-USE server-side (consumed at export). The node is
+   *  authoritative: once an export is DISPATCHED, its session may have been
+   *  consumed regardless of the HTTP outcome (a network error can hide a
+   *  server-side success), so this client retires `activeSession` after
+   *  every dispatched attempt (review B3 post-merge F1). It is never
+   *  auto-retried, and never parses the refusal reason to guess liveness.
+   *  Call `beginSession()` again before the next export. */
+  async exportProduct(body: ExportRequestBody): Promise<ExportOutcome> {
     const session = body.session ?? this.activeSession;
     if (session === undefined) {
       throw new Error(
@@ -234,11 +253,31 @@ export class NodeClient {
     if (this.exportToken !== undefined) {
       headers["x-geobase-export-token"] = this.exportToken;
     }
-    return this.requestObject<ExportOutcome>("/api/export", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ ...body, session }),
-    });
+    // Serialize BEFORE the dispatch try: a non-serializable body throws here,
+    // before any request is dispatched, so the `finally` never retires a
+    // still-open session for an attempt that never left the client (review
+    // B3 post-merge remediation-review).
+    const payload = JSON.stringify({ ...body, session });
+    try {
+      return await this.requestObject<ExportOutcome>("/api/export", {
+        method: "POST",
+        headers,
+        body: payload,
+      });
+    } finally {
+      // The attempt was dispatched — the node may have consumed `session`.
+      // Retire it, but only if it is still the client's active one (never
+      // clobber a session a concurrent `beginSession()` already replaced,
+      // and never touch a caller-supplied `body.session` that differs).
+      // Advancing `sessionEpoch` invalidates any beginSession issued BEFORE
+      // this consume whose response has not yet landed, so its stale id
+      // cannot re-assign the just-consumed session (remediation-review
+      // MAJOR residual).
+      if (this.activeSession === session) {
+        this.activeSession = undefined;
+        this.sessionEpoch++;
+      }
+    }
   }
 
   private getObject<T>(path: string): Promise<T> {
@@ -368,4 +407,4 @@ export interface SoloApp {
   exportProduct(product: string, features: PaintedFeature[]): Promise<ExportOutcome>;
 }
 
-export const SOLO_SDK_VERSION = "0.3.0";
+export const SOLO_SDK_VERSION = "0.3.1";

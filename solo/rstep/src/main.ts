@@ -77,7 +77,18 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
 const panel = buildPanel();
+// UI-only: packs with at least one rendered layer (drives the layer panel).
 const activePackIds: string[] = [];
+// Provenance: EVERY pack the node served us (layers OR features), captured
+// before any geometry/SRS/render filtering. Design §4 says the export
+// source set is "every pack served, period" — so this is the set we replay
+// into a fresh session before export, never the narrower renderable set
+// (review B3 post-merge F1). Sessions are single-use; the SDK retires the
+// active one after every export, so each export re-establishes and
+// re-witnesses the complete served set.
+const servedPackIds = new Set<string>();
+// Guards a rapid double-click from racing two POSTs against one session.
+let exportInFlight = false;
 const paint = new HandRolledPaintTool(map, { score: () => scoreValue(panel.score) });
 paint.onChange(() => updateDrawButton(panel.draw, paint));
 
@@ -121,6 +132,7 @@ declare global {
       paint: HandRolledPaintTool;
       client: NodeClient;
       activePacks(): string[];
+      servedPacks(): string[];
     };
   }
 }
@@ -132,6 +144,7 @@ window.__rstep = {
   paint,
   client,
   activePacks: () => [...activePackIds],
+  servedPacks: () => [...servedPackIds],
 };
 
 void ready.catch((err: unknown) => {
@@ -222,6 +235,9 @@ async function stackRenderableLayers(): Promise<void> {
   for (const pack of catalog) {
     const layers = await packLayers(pack);
     if (layers === null) continue;
+    // The node witnessed this pack the moment it served its layers —
+    // record it for provenance BEFORE any render filtering below.
+    servedPackIds.add(pack.id);
 
     for (const layer of layers.layers) {
       const geometry = layer.geometry_type.toUpperCase();
@@ -396,8 +412,50 @@ function updateDrawButton(button: HTMLButtonElement, tool: HandRolledPaintTool):
   button.textContent = drawing ? "Cancel" : "Draw";
 }
 
+/** Establish a witnessed session for THIS export and replay the full
+ *  served set into it. Sessions are single-use, so after a prior export
+ *  the client's active one is retired; `beginSession()` is idempotent
+ *  server-side (returns the operator's open session, or mints a fresh
+ *  one), and replaying `layers` re-witnesses every served pack.
+ *
+ *  FAIL CLOSED (review B3 post-merge remediation-review BLOCK): if ANY
+ *  previously served pack cannot be re-witnessed — it has become T3,
+ *  missing, or unopenable, so the serve returns 403 BEFORE the node
+ *  witnesses it — this export is ABORTED. Continuing would name a fresh
+ *  session whose node record is missing that pack; because agreement
+ *  matching is subset-based, the already-painted product could then
+ *  publish with a contributing pack silently dropped from the source set
+ *  (a T3-floor bypass, design §4 "every pack served, period"). We must
+ *  never reconstruct a NARROWER provenance than the one the product was
+ *  actually derived from. (A node-side session rollover that carries the
+ *  prior witnessed set forward without client re-serves is the durable
+ *  fix — B5, alongside authenticated serves.) */
+async function witnessSessionForExport(): Promise<void> {
+  await client.beginSession();
+  for (const packId of servedPackIds) {
+    try {
+      await client.layers(packId);
+    } catch (err: unknown) {
+      const detail = err instanceof NodeRequestError ? `${err.status} ${err.reason}` : String(err);
+      throw new Error(
+        `export aborted: source pack '${packId}' can no longer be witnessed (${detail}). ` +
+          "It was part of this product's source set but the node now refuses to serve it " +
+          "(reclassified, missing, or unreadable), so exporting would silently drop it from " +
+          "the provenance. Reload to rebuild the session against the current catalog.",
+      );
+    }
+  }
+}
+
 async function exportProduct(): Promise<void> {
+  // Double-click guard: one export at a time so two POSTs cannot race a
+  // single-use session (review B3 post-merge F1).
+  if (exportInFlight) return;
+  exportInFlight = true;
+  panel.exportButton.disabled = true;
   try {
+    // Re-establish and re-witness the complete served set for THIS export.
+    await witnessSessionForExport();
     // B3: the source set is the node's witnessed session record — the
     // app names only the session (via the client), never the packs.
     const outcome = await client.exportProduct({
@@ -417,8 +475,11 @@ async function exportProduct(): Promise<void> {
   } catch (err: unknown) {
     if (err instanceof NodeRequestError) {
       panel.status.textContent = `${err.status} ${err.reason}`;
-      return;
+    } else {
+      panel.status.textContent = err instanceof Error ? err.message : String(err);
     }
-    panel.status.textContent = err instanceof Error ? err.message : String(err);
+  } finally {
+    exportInFlight = false;
+    panel.exportButton.disabled = false;
   }
 }
