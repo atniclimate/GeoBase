@@ -156,6 +156,10 @@ export class NodeClient {
   readonly baseUrl: string;
   private readonly exportToken?: string;
   private activeSession?: string;
+  // Monotonic issuance epoch (review B3 post-merge remediation-review
+  // MAJOR): only the LATEST beginSession may assign activeSession, so a
+  // delayed older issuance response cannot overwrite a newer session.
+  private sessionEpoch = 0;
 
   constructor(baseUrl: string, options?: NodeClientOptions) {
     const parsed = new URL(baseUrl);
@@ -190,6 +194,7 @@ export class NodeClient {
     if (this.exportToken !== undefined) {
       headers["x-geobase-export-token"] = this.exportToken;
     }
+    const epoch = ++this.sessionEpoch;
     const body = await this.requestObject<{ session: string }>("/api/sessions", {
       method: "POST",
       headers,
@@ -197,7 +202,12 @@ export class NodeClient {
     if (typeof body.session !== "string" || body.session === "") {
       throw new Error("node did not return a session id");
     }
-    this.activeSession = body.session;
+    // Only assign if no newer beginSession has started since — a delayed
+    // older response must never clobber a fresher session (or a session the
+    // node has since consumed). The caller still gets its own issued id.
+    if (epoch === this.sessionEpoch) {
+      this.activeSession = body.session;
+    }
     return body.session;
   }
 
@@ -242,11 +252,16 @@ export class NodeClient {
     if (this.exportToken !== undefined) {
       headers["x-geobase-export-token"] = this.exportToken;
     }
+    // Serialize BEFORE the dispatch try: a non-serializable body throws here,
+    // before any request is dispatched, so the `finally` never retires a
+    // still-open session for an attempt that never left the client (review
+    // B3 post-merge remediation-review).
+    const payload = JSON.stringify({ ...body, session });
     try {
       return await this.requestObject<ExportOutcome>("/api/export", {
         method: "POST",
         headers,
-        body: JSON.stringify({ ...body, session }),
+        body: payload,
       });
     } finally {
       // The attempt was dispatched — the node may have consumed `session`.

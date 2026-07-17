@@ -287,6 +287,13 @@ async function main() {
   if (JSON.stringify(active) !== JSON.stringify(expected)) {
     fail(`active packs ${JSON.stringify(active)} != fixtures ${JSON.stringify(expected)}`);
   }
+  // The provenance set the export replays is the FULL served set (design §4),
+  // which must cover every fixture pack the node served (review B3 post-merge
+  // remediation-review: servedPacks is the authoritative replay set).
+  const served = await page.evaluate(() => window.__rstep.servedPacks().slice().sort());
+  for (const pack of expected) {
+    if (!served.includes(pack)) fail(`served packs ${JSON.stringify(served)} omit ${pack}`);
+  }
 
   const capture = async (name) => {
     const file = join(OUT_DIR, `${name}.png`);
@@ -532,6 +539,48 @@ async function main() {
     `[export×2] second export under a DISTINCT session (${session2.slice(0, 8)}… ≠ ` +
       `${String(session1).slice(0, 8)}…), one POST under rapid double-click, ` +
       "product + full ledger trail re-verified — single-use session lifecycle holds",
+  );
+
+  // ------- Fail-closed re-witness: a served pack that becomes unresolvable
+  //         must ABORT the export, never publish a narrowed source set -------
+  // Review B3 post-merge remediation-review BLOCK: after export consumed its
+  // session, a fresh session must re-witness the FULL served set. If a
+  // previously served pack is now T3/missing/unopenable, the node refuses to
+  // serve it (403 before witnessing), so the app must abort — otherwise the
+  // already-painted product would publish with that pack silently dropped
+  // (subset matching would still authorize the reduced set). Simulated by
+  // removing a served source artifact from the vault, the "missing →
+  // unresolvable" instance of the invariant.
+  const capacityGpkg = join(vault, "rstep-capacity-2026.gpkg");
+  rmSync(capacityGpkg, { force: true });
+  const PRODUCT3 = `${PRODUCT}-3`;
+  const bundleDir3 = join(exportsDir, PRODUCT3);
+  await page.fill("#rstep-product", PRODUCT3);
+  const postsBeforeThird = exportPosts;
+  await page.click("#rstep-export");
+  // The abort is client-side (re-witness throws before any /api/export POST),
+  // surfaced in the status panel.
+  await page.waitForFunction(
+    () => (document.querySelector("#rstep-status")?.textContent ?? "").includes("export aborted"),
+    undefined,
+    { timeout: WAIT_MS },
+  ).catch(() =>
+    fail(
+      "export with an unresolvable served pack did NOT abort — a narrowed source set " +
+        `could publish (BLOCK)\nconsole:\n${consoleErrors.join("\n")}`,
+    ),
+  );
+  await sleep(500);
+  if (exportPosts !== postsBeforeThird) {
+    fail(`aborted export still dispatched ${exportPosts - postsBeforeThird} /api/export POST(s) — must be zero`);
+  }
+  if (existsSync(bundleDir3)) fail(`aborted export wrote a product bundle at ${bundleDir3}`);
+  // The ledger must carry NO third product (nothing was attempted node-side).
+  const audit3 = await run(AUDIT_VERIFIER, [exportsDir, PRODUCT3, "--expect-action", "export.published"]);
+  if (audit3.code === 0) fail("ledger unexpectedly contains a published row for the aborted third export");
+  console.log(
+    "[fail-closed] a served pack made unresolvable aborted the export client-side: " +
+      "zero /api/export POSTs, no product bundle, no ledger row — narrowed provenance refused",
   );
 
   // ------- Negative controls (assert the SPECIFIC failure marker) -------

@@ -3231,8 +3231,8 @@ mod tests {
     /// escape + the re-record policy), it happens BEFORE any listener binds,
     /// and it leaves the ledger byte-for-byte unchanged.
     #[tokio::test]
-    async fn export_enabled_startup_with_unreadable_ledger_refuses_before_bind_and_preserves_ledger()
-    {
+    async fn export_enabled_startup_with_unreadable_ledger_refuses_before_bind_and_preserves_ledger(
+    ) {
         let exports = temp_path("f3-recovery-exports");
         std::fs::create_dir_all(&exports).unwrap();
         // Materialize a leftover UNENCRYPTED-DEV ledger, as a past
@@ -3266,8 +3266,14 @@ mod tests {
         };
         assert!(matches!(err, ServerError::Recovery { .. }), "{err}");
         let msg = err.to_string();
-        assert!(msg.contains("unset GEOBASE_EXPORTS"), "actionable viewer escape: {msg}");
-        assert!(msg.contains("re-recorded"), "names the re-record policy: {msg}");
+        assert!(
+            msg.contains("unset GEOBASE_EXPORTS"),
+            "actionable viewer escape: {msg}"
+        );
+        assert!(
+            msg.contains("re-recorded"),
+            "names the re-record policy: {msg}"
+        );
         // Recovery touched nothing — the ledger is byte-for-byte unchanged.
         assert_eq!(std::fs::read(&ledger).unwrap(), before);
     }
@@ -3441,7 +3447,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(session_survived(&app, "secret-token", &session).await);
 
-        // Nothing was written: no consent store, no bundle, no staging.
+        // Nothing was written: no ledger row, no consent store, no bundle,
+        // no staging — a pre-consume content error touches no durable state.
+        assert!(!exports.join("node-audit.gpkg").exists());
         assert!(!exports.join("node-consent.gpkg").exists());
         assert!(!exports.join("guard-check").exists());
         assert!(!exports.join(".staging").exists());
@@ -3779,6 +3787,98 @@ mod tests {
                 PREAUTH_REFUSAL_PUBLIC_REASON
             );
         }
+    }
+
+    /// Review B3 post-merge remediation-review (MINOR): the uniformity holds
+    /// on the FAIL-CLOSED path too — when the node cannot record the refusal
+    /// (no cipher for the T3 ledger), all three pre-auth branches return the
+    /// byte-identical 503 body, so the audit-failure text is not a residual
+    /// oracle either.
+    #[tokio::test]
+    async fn preauth_fail_closed_503_is_uniform_across_session_floor_and_token() {
+        // Fail-closed node (at_rest: None → FailClosedCipher) with a token
+        // and a T1 pack; returns (app, source id, source path).
+        fn fc_node(prefix: &str) -> (axum::Router, String, PathBuf) {
+            let entry = create_pack(&format!("{prefix}-src.gpkg"), Some(Tier::T1));
+            let id = entry.id.clone();
+            let path = entry.path.clone();
+            let app = router(
+                test_node(vec![entry]),
+                &ServerConfig {
+                    exports_dir: Some(temp_path(&format!("{prefix}-exports"))),
+                    export_token: Some("secret-token".into()),
+                    ..ServerConfig::default()
+                },
+            );
+            (app, id, path)
+        }
+
+        // (1) invalid session — the first pre-auth step.
+        let (app_s, _s_id, _s_path) = fc_node("fc503-session");
+        let r_session = app_s
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        session_export_body("no-such-session").to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // (2) T3 floor — witness a low pack, reclassify it to T3, no token.
+        let (app_f, f_id, f_path) = fc_node("fc503-floor");
+        let f_session = witnessed_session(&app_f, "secret-token", &f_id).await;
+        {
+            let gpkg = GeoPackage::open(&f_path).unwrap();
+            gpkg.write_tsdf_tag(&TsdfTag {
+                table: None,
+                tier: Tier::T3,
+                tsdf_version: "0.9.4".into(),
+                tsdf_source_origin: "vendored:test".into(),
+                classified_by: "fc503-floor".into(),
+                extras: Map::new(),
+            })
+            .unwrap();
+        }
+        let r_floor = app_f
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(session_export_body(&f_session).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // (3) invalid token — witness a low pack, wrong token.
+        let (app_t, t_id, _t_path) = fc_node("fc503-token");
+        let t_session = witnessed_session(&app_t, "secret-token", &t_id).await;
+        let r_token = app_t
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "wrong-token")
+                    .body(Body::from(session_export_body(&t_session).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let mut bodies = Vec::new();
+        for r in [r_session, r_floor, r_token] {
+            assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+            bodies.push(
+                json_response(r).await["reason"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        assert_eq!(bodies[0], bodies[1], "session vs floor 503 differ");
+        assert_eq!(bodies[1], bodies[2], "floor vs token 503 differ");
+        assert!(bodies[0].contains("fail-closed"), "{}", bodies[0]);
     }
 
     /// [A1 / review B3] An empty configured token is treated as UNCONFIGURED

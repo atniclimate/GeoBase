@@ -416,17 +416,33 @@ function updateDrawButton(button: HTMLButtonElement, tool: HandRolledPaintTool):
  *  served set into it. Sessions are single-use, so after a prior export
  *  the client's active one is retired; `beginSession()` is idempotent
  *  server-side (returns the operator's open session, or mints a fresh
- *  one), and replaying `layers` re-witnesses every served pack so the
- *  node's source set for this export is the complete one (design §4). */
+ *  one), and replaying `layers` re-witnesses every served pack.
+ *
+ *  FAIL CLOSED (review B3 post-merge remediation-review BLOCK): if ANY
+ *  previously served pack cannot be re-witnessed — it has become T3,
+ *  missing, or unopenable, so the serve returns 403 BEFORE the node
+ *  witnesses it — this export is ABORTED. Continuing would name a fresh
+ *  session whose node record is missing that pack; because agreement
+ *  matching is subset-based, the already-painted product could then
+ *  publish with a contributing pack silently dropped from the source set
+ *  (a T3-floor bypass, design §4 "every pack served, period"). We must
+ *  never reconstruct a NARROWER provenance than the one the product was
+ *  actually derived from. (A node-side session rollover that carries the
+ *  prior witnessed set forward without client re-serves is the durable
+ *  fix — B5, alongside authenticated serves.) */
 async function witnessSessionForExport(): Promise<void> {
   await client.beginSession();
   for (const packId of servedPackIds) {
     try {
       await client.layers(packId);
     } catch (err: unknown) {
-      // A pack that no longer resolves is the node's decision to refuse at
-      // export (floor), not ours to hide — log and continue re-witnessing.
-      console.error(`[RStep] re-witness of pack '${packId}' failed:`, err);
+      const detail = err instanceof NodeRequestError ? `${err.status} ${err.reason}` : String(err);
+      throw new Error(
+        `export aborted: source pack '${packId}' can no longer be witnessed (${detail}). ` +
+          "It was part of this product's source set but the node now refuses to serve it " +
+          "(reclassified, missing, or unreadable), so exporting would silently drop it from " +
+          "the provenance. Reload to rebuild the session against the current catalog.",
+      );
     }
   }
 }
