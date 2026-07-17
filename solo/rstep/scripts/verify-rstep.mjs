@@ -262,6 +262,14 @@ async function main() {
   const consoleErrors = [];
   page.on("console", (msg) => msg.type() === "error" && consoleErrors.push(msg.text()));
   page.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
+  // Count dispatched export POSTs — the double-click guard must collapse a
+  // rapid double-click to exactly one (review B3 post-merge F1).
+  let exportPosts = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/export") {
+      exportPosts += 1;
+    }
+  });
 
   await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
   try {
@@ -369,6 +377,8 @@ async function main() {
   );
   await page.click("#rstep-export");
   const response = await responsePromise;
+  const session1 = response.request().postDataJSON()?.session;
+  if (typeof session1 !== "string" || session1 === "") fail("export 1 carried no session id");
   const exportResponse = { status: response.status(), body: await response.json() };
   await page.waitForFunction(
     () => (document.querySelector("#rstep-status")?.textContent?.length ?? 0) > 0,
@@ -413,19 +423,19 @@ async function main() {
   // ------- Oracle re-proof + ledger via the trusted (assertion-only) verifier -------
   const paintedJson = join(tmp, "painted.json");
   writeFileSync(paintedJson, JSON.stringify(painted));
-  const oracleArgs = (shp, sidecar) => [
+  const oracleArgs = (product, shp, sidecar) => [
     join(RSTEP_ROOT, "scripts", "verify_rstep_oracle.py"),
     "--product-shp", shp,
     "--painted-json", paintedJson,
     "--sidecar", sidecar,
     "--expect-features", "1",
-    "--expect-product", PRODUCT,
+    "--expect-product", product,
     "--source", join(vault, "rstep-capacity-2026.gpkg"),
     "--source", join(vault, "rstep-nogo-2026.gpkg"),
   ];
   const oracle = await run(
     PYTHON,
-    oracleArgs(join(bundleDir, `${PRODUCT}.shp`), join(bundleDir, `${PRODUCT}.tsdf.json`)),
+    oracleArgs(PRODUCT, join(bundleDir, `${PRODUCT}.shp`), join(bundleDir, `${PRODUCT}.tsdf.json`)),
   );
   if (oracle.code !== 0) fail(`oracle failed:\n${oracle.stdout}\n${oracle.stderr}`);
   console.log(`[oracle] ${oracle.stdout.trim()}`);
@@ -450,6 +460,80 @@ async function main() {
   if (audit.code !== 0) fail(`audit verifier failed:\n${audit.stdout}\n${audit.stderr}`);
   console.log(`[ledger] ${audit.stdout.trim().split("\n").pop()}`);
 
+  // ------- Second export, NO reload: single-use session lifecycle (F1) -------
+  // Export 1 consumed its session; the SDK retired it. A second export from
+  // the SAME loaded page must re-establish a FRESH session, re-witness the
+  // complete served set into it, and succeed — proving the app never reuses
+  // a consumed session id (the exact bug F1). A rapid double-click must
+  // dispatch exactly ONE POST (the in-flight guard).
+  const PRODUCT2 = `${PRODUCT}-2`;
+  const bundleDir2 = join(exportsDir, PRODUCT2);
+  await page.fill("#rstep-product", PRODUCT2);
+  const postsBeforeSecond = exportPosts;
+  const response2Promise = page.waitForResponse(
+    (r) => r.url().includes("/api/export") && r.request().method() === "POST",
+    { timeout: WAIT_MS },
+  );
+  // Two synchronous clicks — the guard (in-flight flag + disabled button)
+  // must collapse them to a single dispatched export.
+  await page.evaluate(() => {
+    const b = document.querySelector("#rstep-export");
+    b.click();
+    b.click();
+  });
+  const response2 = await response2Promise;
+  const session2 = response2.request().postDataJSON()?.session;
+  const export2 = { status: response2.status(), body: await response2.json() };
+  await page.waitForFunction(
+    (name) => (document.querySelector("#rstep-status")?.textContent ?? "").includes(name),
+    PRODUCT2,
+    { timeout: WAIT_MS },
+  );
+  // Let any (wrongly) second POST surface, then assert exactly one.
+  await sleep(500);
+  if (exportPosts - postsBeforeSecond !== 1) {
+    fail(`rapid double-click dispatched ${exportPosts - postsBeforeSecond} export POSTs, expected exactly 1`);
+  }
+  if (typeof session2 !== "string" || session2 === "") fail("export 2 carried no session id");
+  if (session2 === session1) {
+    fail(`export 2 reused the consumed session ${session1} — sessions are single-use`);
+  }
+  if (export2.status !== 200) {
+    fail(`export 2 returned ${export2.status}: ${JSON.stringify(export2.body)}`);
+  }
+  if (export2.body.tier !== "T2") fail(`export 2 tier ${export2.body.tier} != T2`);
+  if (export2.body.ceremony?.process !== EXPECT_PROCESS) {
+    fail(`export 2 ceremony process ${JSON.stringify(export2.body.ceremony?.process)} != ${EXPECT_PROCESS}`);
+  }
+  for (const [kind, file] of Object.entries(export2.body.files)) {
+    const onDisk = join(bundleDir2, file.name);
+    if (!existsSync(onDisk)) fail(`export 2 names ${file.name} but it is not in the bundle`);
+    if (sha256(onDisk) !== file.sha256) fail(`export 2 ${kind} sha256 mismatch`);
+  }
+  const oracle2 = await run(
+    PYTHON,
+    oracleArgs(PRODUCT2, join(bundleDir2, `${PRODUCT2}.shp`), join(bundleDir2, `${PRODUCT2}.tsdf.json`)),
+  );
+  if (oracle2.code !== 0) fail(`export 2 oracle failed:\n${oracle2.stdout}\n${oracle2.stderr}`);
+  const audit2 = await run(AUDIT_VERIFIER, [
+    exportsDir, PRODUCT2,
+    "--expect-action", "export.intent",
+    "--expect-action", "export.ceremony",
+    "--expect-action", "export.t2",
+    "--expect-action", "export.published",
+    "--expect-actor", EXPECT_ACTOR,
+    "--expect-process", EXPECT_PROCESS,
+    "--expect-basis", EXPECT_BASIS,
+    "--forbid-substring", token,
+    "--forbid-substring", PROVISIONAL_BASIS,
+  ]);
+  if (audit2.code !== 0) fail(`export 2 audit verifier failed:\n${audit2.stdout}\n${audit2.stderr}`);
+  console.log(
+    `[export×2] second export under a DISTINCT session (${session2.slice(0, 8)}… ≠ ` +
+      `${String(session1).slice(0, 8)}…), one POST under rapid double-click, ` +
+      "product + full ledger trail re-verified — single-use session lifecycle holds",
+  );
+
   // ------- Negative controls (assert the SPECIFIC failure marker) -------
   const tampered = join(tmp, "tampered");
   mkdirSync(tampered, { recursive: true });
@@ -462,7 +546,7 @@ async function main() {
   writeFileSync(join(tampered, `${PRODUCT}.shp`), shpBytes);
   const tamperedOracle = await run(
     PYTHON,
-    oracleArgs(join(tampered, `${PRODUCT}.shp`), join(tampered, `${PRODUCT}.tsdf.json`)),
+    oracleArgs(PRODUCT, join(tampered, `${PRODUCT}.shp`), join(tampered, `${PRODUCT}.tsdf.json`)),
   );
   if (tamperedOracle.code === 0 || !`${tamperedOracle.stdout}${tamperedOracle.stderr}`.includes("ORACLE-FAIL")) {
     fail(`NEGATIVE CONTROL FAILED: tampered product not refused with ORACLE-FAIL:\n${tamperedOracle.stderr}`);

@@ -77,7 +77,18 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
 const panel = buildPanel();
+// UI-only: packs with at least one rendered layer (drives the layer panel).
 const activePackIds: string[] = [];
+// Provenance: EVERY pack the node served us (layers OR features), captured
+// before any geometry/SRS/render filtering. Design §4 says the export
+// source set is "every pack served, period" — so this is the set we replay
+// into a fresh session before export, never the narrower renderable set
+// (review B3 post-merge F1). Sessions are single-use; the SDK retires the
+// active one after every export, so each export re-establishes and
+// re-witnesses the complete served set.
+const servedPackIds = new Set<string>();
+// Guards a rapid double-click from racing two POSTs against one session.
+let exportInFlight = false;
 const paint = new HandRolledPaintTool(map, { score: () => scoreValue(panel.score) });
 paint.onChange(() => updateDrawButton(panel.draw, paint));
 
@@ -121,6 +132,7 @@ declare global {
       paint: HandRolledPaintTool;
       client: NodeClient;
       activePacks(): string[];
+      servedPacks(): string[];
     };
   }
 }
@@ -132,6 +144,7 @@ window.__rstep = {
   paint,
   client,
   activePacks: () => [...activePackIds],
+  servedPacks: () => [...servedPackIds],
 };
 
 void ready.catch((err: unknown) => {
@@ -222,6 +235,9 @@ async function stackRenderableLayers(): Promise<void> {
   for (const pack of catalog) {
     const layers = await packLayers(pack);
     if (layers === null) continue;
+    // The node witnessed this pack the moment it served its layers —
+    // record it for provenance BEFORE any render filtering below.
+    servedPackIds.add(pack.id);
 
     for (const layer of layers.layers) {
       const geometry = layer.geometry_type.toUpperCase();
@@ -396,8 +412,34 @@ function updateDrawButton(button: HTMLButtonElement, tool: HandRolledPaintTool):
   button.textContent = drawing ? "Cancel" : "Draw";
 }
 
+/** Establish a witnessed session for THIS export and replay the full
+ *  served set into it. Sessions are single-use, so after a prior export
+ *  the client's active one is retired; `beginSession()` is idempotent
+ *  server-side (returns the operator's open session, or mints a fresh
+ *  one), and replaying `layers` re-witnesses every served pack so the
+ *  node's source set for this export is the complete one (design §4). */
+async function witnessSessionForExport(): Promise<void> {
+  await client.beginSession();
+  for (const packId of servedPackIds) {
+    try {
+      await client.layers(packId);
+    } catch (err: unknown) {
+      // A pack that no longer resolves is the node's decision to refuse at
+      // export (floor), not ours to hide — log and continue re-witnessing.
+      console.error(`[RStep] re-witness of pack '${packId}' failed:`, err);
+    }
+  }
+}
+
 async function exportProduct(): Promise<void> {
+  // Double-click guard: one export at a time so two POSTs cannot race a
+  // single-use session (review B3 post-merge F1).
+  if (exportInFlight) return;
+  exportInFlight = true;
+  panel.exportButton.disabled = true;
   try {
+    // Re-establish and re-witness the complete served set for THIS export.
+    await witnessSessionForExport();
     // B3: the source set is the node's witnessed session record — the
     // app names only the session (via the client), never the packs.
     const outcome = await client.exportProduct({
@@ -417,8 +459,11 @@ async function exportProduct(): Promise<void> {
   } catch (err: unknown) {
     if (err instanceof NodeRequestError) {
       panel.status.textContent = `${err.status} ${err.reason}`;
-      return;
+    } else {
+      panel.status.textContent = err instanceof Error ? err.message : String(err);
     }
-    panel.status.textContent = err instanceof Error ? err.message : String(err);
+  } finally {
+    exportInFlight = false;
+    panel.exportButton.disabled = false;
   }
 }
