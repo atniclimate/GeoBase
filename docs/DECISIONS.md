@@ -638,3 +638,59 @@ choose a fresh pinned revision, re-run the license/file inventory against
 it, then either adopt Next Gen (crate-level MIT/Apache grant) or take the
 pre-approved legacy-MIT fallback, which remains one decision away with no
 new vetting round.
+
+## 2026-07-16 — B3 merged; raw-SQL residual re-scoped; B4 fence + storage-key custody ratified (owner acts)
+
+**Trigger:** owner acts at the 2026-07-16 (night) sitting, closing the B3
+adversarial cycle (three Codex reviews + two addenda; final verdict PASS)
+and settling the B4 questions its findings and the sovereignty-stack
+integration assessment (`C:\dev\_reviews\geobase\
+2026-07-16_sovereignty-stack-integration-assessment.md`) raised.
+
+**Residual re-scoped and RATIFIED:** the accepted-until-B4 raw-SQL
+forgery residual covers **both consent kinds**, not signed-kind only —
+the §9 witnessed-verbal commitment is an unkeyed integrity digest
+(binds detail to hash; supports compaction verification), **not writer
+authentication**; a raw-SQL writer who computes the public digest over
+fabricated detail authorizes. Documented in `consent_store.rs` module
+docs and pinned by the test
+`honest_residual_a_correctly_hashed_witnessed_forgery_authorizes_until_b4`,
+which B4 must flip when the sealed store lands.
+
+**B4 fence:** B4 seals **both** bounded T3 metadata stores (consent
+store + export ledger) under the one DG-2 envelope design. Source-file
+locking (strict total ordering of source-pack mutations vs ledger seal,
+noted in review round 3) is **B5 scope**, where authenticated serves
+give operator↔work-unit binding meaning.
+
+**Storage-key custody:** multi-slot **named custody** — the envelope DEK
+is wrapped independently under each enrolled custodian's Argon2id
+passphrase (LUKS-style key slots; two slots at node establishment:
+LocalOperator + a council-designated steward). Any one custodian unlocks
+alone (routine operation stays a one-person act); **enrollment and
+revocation of slots are audited ceremonies requiring an existing
+custodian**. This is not escrow: every slot is a named, ceremony-enrolled
+person; no third party, master key, or vendor path exists; losing all
+slots remains deliberately unrecoverable, with a documented, rehearsed
+re-establishment drill (new store, re-record from originals, sealed
+artifacts retained) as a B4 deliverable. Threshold/quorum unlock is
+REJECTED for B4-era single-node operation (defends a key-holding-human
+threat B4's proof boundary explicitly does not claim, at daily
+operational cost); it remains open for the governance-server era.
+
+**Role separation (law):** storage keys (B4), authentication credentials
+(B5 — OS-keychain baseline, optional FIDO2), and evidence-signing keys
+(post-B5) are distinct roles; authentication credentials never decrypt
+stores, and credential recovery never becomes T3-key recovery.
+
+**Migration:** production openers refuse `UNENCRYPTED-DEV` artifacts
+permanently; no silent conversion. Dev data is re-recorded.
+
+**Assessment verdicts adopted as posture:** Keycloak, gate-level OPA,
+node keyless Sigstore/transparency services, and TEEs are REJECTED;
+detached-signature and signed-manifest concepts, X25519 recipients (for
+any future ratified T2 exchange), and optional FIDO2 at B5 are ADAPT
+candidates. Remaining owner items from the assessment (#8–14:
+attestation posture, TribalDelegate issuance, signing profiles, release
+signing, federation trust, T2 exchange) queue for the B4/B5 design
+sitting.
