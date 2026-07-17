@@ -248,9 +248,12 @@ pub(crate) mod export_test_hooks {
 }
 
 /// Append a GENERIC `export.refused` audit row for a request that failed
-/// the interim operator token guard (A1) — refused BEFORE the request body
-/// was parsed, so there is no trusted product/requester to record and none
-/// is invented. Fail-closed posture preserved: no cipher → `Encryption`.
+/// the interim operator token guard (A1) at §5.1 step 3. Under the
+/// ratified route order the body HAS been structurally parsed and the
+/// session resolved read-only before this point — but nothing
+/// request-claimed is trusted or attributed (review H1's audit posture),
+/// and the ceremony seam was never consulted. Fail-closed posture
+/// preserved: no cipher → `Encryption`.
 pub fn record_unauthenticated_refusal(
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
@@ -265,9 +268,9 @@ pub fn record_unauthenticated_refusal(
         tsdf_source_origin: tsdf_origin,
         details: serde_json::json!({
             "reason": "missing or invalid export token (interim operator \
-                       guard — Phase A A1; refused before the request body was \
-                       read, so no product/requester is attributed; the ceremony \
-                       seam was never consulted)",
+                       guard — Phase A A1; refused before authentication \
+                       completed, so no request-claimed product/requester is \
+                       attributed; the ceremony seam was never consulted)",
             // The node-clock instant this refusal was decided at (review
             // B3 F6): every governance refusal carries when it happened,
             // even pre-gate ones.

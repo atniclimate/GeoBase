@@ -141,11 +141,28 @@ impl SessionRegistry {
         }
     }
 
+    /// Resolve a session READ-ONLY: verify it belongs to `owner` and
+    /// return the node's current record (every pack served) WITHOUT
+    /// closing it. This is §5.1 step 1's primitive — the export route
+    /// derives the floor input from it BEFORE authentication, and a
+    /// pre-authentication refusal (floor, bad token) must never burn the
+    /// operator's session: only the authenticated path consumes.
+    pub fn resolve(&self, session_id: &str, owner: &str) -> Result<Vec<String>, SessionError> {
+        let inner = self.inner.lock().map_err(|_| SessionError::Poisoned)?;
+        match inner.sessions.get(session_id) {
+            Some(record) if record.owner != owner => Err(SessionError::WrongOwner),
+            Some(record) => Ok(record.packs.iter().cloned().collect()),
+            None => Err(SessionError::Unknown),
+        }
+    }
+
     /// Consume a session at export: verify it belongs to `owner`, return
     /// the node's record (every pack served), and **close it** so it can
     /// neither be replayed nor extended after the snapshot. `Err(Unknown)`
     /// for a session this boot never issued or already consumed;
     /// `Err(WrongOwner)` if it was issued to a different operator.
+    /// Reached only AFTER authentication (the read-only [`Self::resolve`]
+    /// serves the pre-authentication steps).
     pub fn consume(&self, session_id: &str, owner: &str) -> Result<Vec<String>, SessionError> {
         let mut inner = self.inner.lock().map_err(|_| SessionError::Poisoned)?;
         match inner.sessions.get(session_id) {
@@ -195,6 +212,37 @@ mod tests {
             SessionError::Unknown
         );
         assert!(!registry.is_open(&id).unwrap());
+    }
+
+    /// §5.1 steps 1–2 must not burn the session: `resolve` is read-only —
+    /// owner-checked like `consume`, but the session stays open, keeps
+    /// accumulating, and is still there for the authenticated consume.
+    #[test]
+    fn resolve_is_read_only_and_owner_checked() {
+        let registry = SessionRegistry::default();
+        let id = registry.issue("local-operator:op").unwrap();
+        registry.witness(&id, "dem").unwrap();
+        assert_eq!(
+            registry.resolve(&id, "local-operator:op").unwrap(),
+            vec!["dem"]
+        );
+        assert_eq!(
+            registry.resolve(&id, "local-operator:other").unwrap_err(),
+            SessionError::WrongOwner
+        );
+        assert_eq!(
+            registry
+                .resolve("deadbeef", "local-operator:op")
+                .unwrap_err(),
+            SessionError::Unknown
+        );
+        // Still open: it keeps witnessing and consume still finds it.
+        assert!(registry.is_open(&id).unwrap());
+        registry.witness(&id, "landcover").unwrap();
+        assert_eq!(
+            registry.consume(&id, "local-operator:op").unwrap(),
+            vec!["dem", "landcover"]
+        );
     }
 
     #[test]

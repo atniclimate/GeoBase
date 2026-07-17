@@ -822,14 +822,15 @@ async fn api_export(
 
     // §5.1 STEP 1 — resolve the session (design §4): the source set is the
     // NODE'S session record — every pack served into the named session,
-    // period. The session is CONSUMED here (owner-checked, single-use —
-    // review B3 F2): the source set is snapshotted and the session closed
-    // so it cannot be replayed or extended. No valid open session bound to
-    // this operator → refuse with a GENERIC refusal row (pre-auth). The
-    // request cannot add or subtract.
+    // period. Resolution here is READ-ONLY (owner-checked): the floor
+    // needs the source set before authentication, but a pre-auth refusal
+    // (floor, bad token) must never burn the operator's session — only
+    // the authenticated path consumes (below). No valid open session
+    // bound to this operator → refuse with a GENERIC refusal row
+    // (pre-auth). The request cannot add or subtract.
     let witnessed_ids = match state
         .sessions
-        .consume(&parsed.session, &requester.audit_string())
+        .resolve(&parsed.session, &requester.audit_string())
     {
         Ok(ids) => ids,
         Err(err) => {
@@ -852,24 +853,25 @@ async fn api_export(
     // against the catalog, its CURRENT effective tier read from the
     // artifact on disk — never the boot-cached hint, never anything the
     // request claimed. A pack that no longer resolves is T3.
-    let sources: Vec<SourcePack> = witnessed_ids
-        .iter()
-        .map(
-            |pack_id| match state.node.catalog.iter().find(|entry| &entry.id == pack_id) {
-                Some(entry) => SourcePack {
-                    id: entry.id.clone(),
-                    path: Some(entry.path.clone()),
-                    tier: entry.tier,
+    let resolve_sources = |ids: &[String]| -> Vec<SourcePack> {
+        ids.iter()
+            .map(
+                |pack_id| match state.node.catalog.iter().find(|entry| &entry.id == pack_id) {
+                    Some(entry) => SourcePack {
+                        id: entry.id.clone(),
+                        path: Some(entry.path.clone()),
+                        tier: entry.tier,
+                    },
+                    None => SourcePack {
+                        id: pack_id.clone(),
+                        path: None,
+                        tier: Tier::T3,
+                    },
                 },
-                None => SourcePack {
-                    id: pack_id.clone(),
-                    path: None,
-                    tier: Tier::T3,
-                },
-            },
-        )
-        .collect();
-    let effective_source_tier = sources
+            )
+            .collect()
+    };
+    let effective_source_tier = resolve_sources(&witnessed_ids)
         .iter()
         .map(|source| match &source.path {
             Some(path) => crate::vault::current_effective_tier(path),
@@ -913,6 +915,42 @@ async fn api_export(
             "invalid token",
         );
     }
+
+    // AUTHENTICATED — now, and only now, CONSUME the session (owner-
+    // checked, single-use — review B3 F2): the source set is snapshotted
+    // and the session closed so it cannot be replayed or extended. The
+    // consumed record is the AUTHORITATIVE source set for the ceremony —
+    // a pack served between the read-only resolution above and this
+    // snapshot is included, and the gate re-derives the floor from it
+    // downstream. An unauthenticated caller can never reach this line, so
+    // it can never burn an operator's session.
+    let witnessed_ids = match state
+        .sessions
+        .consume(&parsed.session, &requester.audit_string())
+    {
+        Ok(ids) => ids,
+        Err(err) => {
+            // The session vanished between resolution and the
+            // authenticated consume (e.g. a concurrent export won the
+            // race). Post-authentication, so the operator identity is
+            // trusted — but the row stays product-free: nothing was
+            // attempted against the ceremony.
+            let reason = format!(
+                "export refused: {err} (the session closed between resolution and the \
+                 authenticated snapshot — obtain a fresh session and retry)"
+            );
+            return preauth_refusal_response(
+                crate::export::record_preauth_refusal(
+                    state.at_rest.as_ref(),
+                    &exports_dir,
+                    &reason,
+                ),
+                &reason,
+                "session closed concurrently",
+            );
+        }
+    };
+    let sources = resolve_sources(&witnessed_ids);
 
     let mut features = Vec::with_capacity(parsed.features.len());
     for (index, feature) in parsed.features.iter().enumerate() {
@@ -3117,6 +3155,7 @@ mod tests {
         // step: a witnessed session over a T1 pack.
         let session = witnessed_session(&app, "secret-token", &id).await;
         let response = app
+            .clone()
             .oneshot(
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
@@ -3156,6 +3195,25 @@ mod tests {
                 "a token-refused export must write no guard-check.{ext}"
             );
         }
+        // The unauthenticated attempt must NOT have burned the operator's
+        // session: only the authenticated path consumes. Idempotent
+        // issuance returns the SAME id iff the session is still open.
+        let response = app
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, "secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(response).await["session"].as_str().unwrap(),
+            session,
+            "an unauthenticated export attempt must not consume the session"
+        );
     }
 
     /// [A1, ratified §5.1 order] A wrong token is refused identically to a
@@ -3252,6 +3310,7 @@ mod tests {
             .unwrap();
         }
         let response = app
+            .clone()
             .oneshot(
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
@@ -3288,6 +3347,24 @@ mod tests {
         assert_eq!(trail.len(), 1, "exactly the refusal row");
         assert_eq!(trail[0].action, "export.refused");
         assert_eq!(trail[0].dataset_id, "(pre-authentication export attempt)");
+        // A pre-authentication floor refusal must NOT consume the session:
+        // idempotent issuance still returns the same open id.
+        let response = app
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, "secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(response).await["session"].as_str().unwrap(),
+            session,
+            "a floor refusal before authentication must not consume the session"
+        );
     }
 
     /// [A1 / review B3] An empty configured token is treated as UNCONFIGURED
