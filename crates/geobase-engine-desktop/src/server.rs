@@ -932,17 +932,20 @@ async fn api_export(
         Err(err) => {
             // The session vanished between resolution and the
             // authenticated consume (e.g. a concurrent export won the
-            // race). Post-authentication, so the operator identity is
-            // trusted — but the row stays product-free: nothing was
-            // attempted against the ceremony.
+            // race). Post-authentication, so the row is attributed to the
+            // trusted operator identity — but stays product-free: nothing
+            // was attempted against the ceremony (review B3-r3
+            // addendum-2 MINOR: never stamp a post-auth refusal with the
+            // pre-authentication actor text).
             let reason = format!(
                 "export refused: {err} (the session closed between resolution and the \
                  authenticated snapshot — obtain a fresh session and retry)"
             );
             return preauth_refusal_response(
-                crate::export::record_preauth_refusal(
+                crate::export::record_session_race_refusal(
                     state.at_rest.as_ref(),
                     &exports_dir,
+                    &requester,
                     &reason,
                 ),
                 &reason,

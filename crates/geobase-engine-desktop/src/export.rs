@@ -320,6 +320,31 @@ pub fn record_preauth_refusal(
     Ok(())
 }
 
+/// Append an `export.refused` row for the narrow POST-authentication
+/// session race (the session closed between the read-only §5.1 step-1
+/// resolution and the authenticated consume — e.g. a concurrent export
+/// won). The operator identity IS trusted here (the token verified), so
+/// the row is attributed honestly; it stays product-free because nothing
+/// was attempted against the ceremony (review B3-r3 addendum-2 MINOR).
+pub fn record_session_race_refusal(
+    cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
+    exports_dir: &Path,
+    requester: &ExportIdentity,
+    reason: &str,
+) -> Result<(), ExportError> {
+    let (tsdf_version, tsdf_origin) = tsdf_info()?;
+    let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
+    ledger.append_audit(&geobase_gpkg::AuditEntry {
+        dataset_id: "(export attempt — session closed concurrently)".into(),
+        action: "export.refused".into(),
+        actor: requester.audit_string(),
+        tsdf_version,
+        tsdf_source_origin: tsdf_origin,
+        details: serde_json::json!({ "reason": reason, "observed_at": refusal_observed_at()? }),
+    })?;
+    Ok(())
+}
+
 /// Export `request` as a T2 product bundle into `exports_dir/<product>/`,
 /// authorized through `gate` against the node-witnessed `sources`,
 /// verified per the module contract, published via the recoverable
