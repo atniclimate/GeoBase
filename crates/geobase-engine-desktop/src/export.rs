@@ -1113,7 +1113,7 @@ fn bundle_exact_match(dir: &Path, files: &serde_json::Map<String, serde_json::Va
 }
 
 /// Request validation — total and loud, naming the offender.
-fn validate_request(request: &ExportRequest) -> Result<(), ExportError> {
+pub(crate) fn validate_request(request: &ExportRequest) -> Result<(), ExportError> {
     let name_ok = !request.product.is_empty()
         && request
             .product

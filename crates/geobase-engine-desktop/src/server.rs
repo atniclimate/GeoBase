@@ -924,7 +924,65 @@ async fn api_export(
         );
     }
 
-    // AUTHENTICATED — now, and only now, CONSUME the session (owner-
+    // AUTHENTICATED. PREFLIGHT the request BEFORE the single-use consume
+    // (review B3 post-merge F2): geometry parsing, request validation, and
+    // the deterministic output-collision check are side-effect-free, so a
+    // recoverable client error (bad geometry / invalid name → 400, an
+    // occupied product name → 409) must NOT burn the operator's witnessed
+    // session. None of this touches the consent store or writes any bytes;
+    // the corrected request retries against the SAME still-open session.
+    let mut features = Vec::with_capacity(parsed.features.len());
+    for (index, feature) in parsed.features.iter().enumerate() {
+        match painted_geometry_from_geojson(&feature.geometry) {
+            Ok(geometry) => features.push(PaintedFeature {
+                geometry,
+                score: feature.score,
+            }),
+            Err(detail) => {
+                return status_json(
+                    StatusCode::BAD_REQUEST,
+                    json!({"reason": format!("feature {index}: {detail}")}),
+                    None,
+                );
+            }
+        }
+    }
+    // Keep the session id — `parsed` is consumed building the request.
+    let session_id = parsed.session;
+    let request = ExportRequest {
+        product: parsed.product,
+        purpose: parsed.purpose,
+        features,
+    };
+    // Route-boundary validation (same rules `export_product_inner` still
+    // enforces for non-route callers): map Invalid → 400 before consume.
+    if let Err(err) = crate::export::validate_request(&request) {
+        return status_json(
+            StatusCode::BAD_REQUEST,
+            json!({"reason": err.to_string()}),
+            None,
+        );
+    }
+    // Deterministic output-collision preflight: a bundle already occupying
+    // this product name is a retryable 409 the operator fixes by renaming —
+    // do not consume the session for it. `validate_request` above proved the
+    // name is grammatical, so the join is safe. NOTE (explicit precedence,
+    // pathway slice 5): an occupied name now 409s BEFORE the ceremony even
+    // when cipher/consent would later fail; a concurrent winner after this
+    // preflight may still consume and hit the in-pipeline Exists check,
+    // which is retained for that TOCTOU race.
+    if exports_dir.join(&request.product).exists() {
+        return status_json(
+            StatusCode::CONFLICT,
+            json!({"reason": format!(
+                "export already exists: {} (pick a new product name)",
+                exports_dir.join(&request.product).display()
+            )}),
+            None,
+        );
+    }
+
+    // Preflight passed — now, and only now, CONSUME the session (owner-
     // checked, single-use — review B3 F2): the source set is snapshotted
     // and the session closed so it cannot be replayed or extended. The
     // consumed record is the AUTHORITATIVE source set for the ceremony —
@@ -934,7 +992,7 @@ async fn api_export(
     // it can never burn an operator's session.
     let witnessed_ids = match state
         .sessions
-        .consume(&parsed.session, &requester.audit_string())
+        .consume(&session_id, &requester.audit_string())
     {
         Ok(ids) => ids,
         Err(err) => {
@@ -963,28 +1021,6 @@ async fn api_export(
     };
     let sources = resolve_sources(&witnessed_ids);
 
-    let mut features = Vec::with_capacity(parsed.features.len());
-    for (index, feature) in parsed.features.iter().enumerate() {
-        match painted_geometry_from_geojson(&feature.geometry) {
-            Ok(geometry) => features.push(PaintedFeature {
-                geometry,
-                score: feature.score,
-            }),
-            Err(detail) => {
-                return status_json(
-                    StatusCode::BAD_REQUEST,
-                    json!({"reason": format!("feature {index}: {detail}")}),
-                    None,
-                );
-            }
-        }
-    }
-
-    let request = ExportRequest {
-        product: parsed.product,
-        purpose: parsed.purpose,
-        features,
-    };
     let gate = state.gate.clone();
     let cipher = state.at_rest.clone();
     // File IO + SQLite are blocking; keep the runtime responsive.
@@ -3230,6 +3266,102 @@ mod tests {
                 "score": 0.5
             }]
         })
+    }
+
+    /// Reissue a session (idempotent per owner) and return whether it kept
+    /// the SAME id — proof the earlier request did NOT consume it.
+    async fn session_survived(app: &axum::Router, token: &str, prior: &str) -> bool {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        json_response(response).await["session"].as_str().unwrap() == prior
+    }
+
+    /// Review B3 post-merge F2: an authenticated request with a recoverable
+    /// CONTENT error (malformed geometry, invalid product name) is refused
+    /// 400 BEFORE the single-use consume, so the witnessed session is NOT
+    /// burned — the corrected retry reuses it. No consent/product/staging
+    /// artifact is created.
+    #[tokio::test]
+    async fn authenticated_content_errors_do_not_consume_witnessed_session() {
+        let (app, exports, id) = export_guard_fixture("f2-content", Some("secret-token"));
+        let session = witnessed_session(&app, "secret-token", &id).await;
+
+        // (a) malformed geometry → 400, session survives.
+        let mut bad_geom = session_export_body(&session);
+        bad_geom["features"][0]["geometry"]["coordinates"] = json!([[[0.0, 0.0]]]);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "secret-token")
+                    .body(Body::from(bad_geom.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(session_survived(&app, "secret-token", &session).await);
+
+        // (b) invalid product name → 400, session still survives.
+        let mut bad_name = session_export_body(&session);
+        bad_name["product"] = json!("Not A Valid Name");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "secret-token")
+                    .body(Body::from(bad_name.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(session_survived(&app, "secret-token", &session).await);
+
+        // Nothing was written: no consent store, no bundle, no staging.
+        assert!(!exports.join("node-consent.gpkg").exists());
+        assert!(!exports.join("guard-check").exists());
+        assert!(!exports.join(".staging").exists());
+    }
+
+    /// Review B3 post-merge F2: an occupied product name is a retryable 409
+    /// decided BEFORE consume, with ZERO consent-store access — the session
+    /// survives and the operator retries under a different name.
+    #[tokio::test]
+    async fn existing_output_is_preconsume_409_and_keeps_the_session() {
+        let (app, exports, id) = export_guard_fixture("f2-exists", Some("secret-token"));
+        let session = witnessed_session(&app, "secret-token", &id).await;
+        // Pre-occupy the bundle name.
+        std::fs::create_dir_all(exports.join("guard-check")).unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(EXPORT_TOKEN_HEADER, "secret-token")
+                    .body(Body::from(session_export_body(&session).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        // Zero consent-store access on the collision path (the gate was
+        // never reached), and the session is not consumed.
+        assert!(!exports.join("node-consent.gpkg").exists());
+        assert!(session_survived(&app, "secret-token", &session).await);
     }
 
     /// [A1, ratified §5.1 order] A missing token is refused 403 at STEP 3 —
