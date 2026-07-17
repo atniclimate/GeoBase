@@ -202,9 +202,10 @@ export class NodeClient {
     if (typeof body.session !== "string" || body.session === "") {
       throw new Error("node did not return a session id");
     }
-    // Only assign if no newer beginSession has started since — a delayed
-    // older response must never clobber a fresher session (or a session the
-    // node has since consumed). The caller still gets its own issued id.
+    // Only assign if this is still the latest lifecycle transition — a
+    // delayed response must never clobber a fresher session OR re-assign a
+    // session an interleaving export has since consumed (both advance
+    // `sessionEpoch`). The caller still gets its own issued id.
     if (epoch === this.sessionEpoch) {
       this.activeSession = body.session;
     }
@@ -268,8 +269,13 @@ export class NodeClient {
       // Retire it, but only if it is still the client's active one (never
       // clobber a session a concurrent `beginSession()` already replaced,
       // and never touch a caller-supplied `body.session` that differs).
+      // Advancing `sessionEpoch` invalidates any beginSession issued BEFORE
+      // this consume whose response has not yet landed, so its stale id
+      // cannot re-assign the just-consumed session (remediation-review
+      // MAJOR residual).
       if (this.activeSession === session) {
         this.activeSession = undefined;
+        this.sessionEpoch++;
       }
     }
   }
