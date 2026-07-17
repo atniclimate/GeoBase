@@ -578,8 +578,16 @@ fn session_gate_and_witness(
     let session_id = headers.get(SESSION_HEADER).and_then(|v| v.to_str().ok());
     let exports_enabled = state.exports_dir.is_some();
     match session_id {
+        // On an export-enabled node an unknown/closed session is refused
+        // loudly — provenance must be complete. On a VIEWER-ONLY node the
+        // registry can never hold any id (POST /api/sessions 503s before
+        // issuance), so a witness failure is not an error: the header is
+        // ignored and the pack serves. This is the "best-effort on
+        // viewer-only" contract the docs promise, made real (review B3
+        // post-merge F8) — previously any stale header 400'd every serve.
         Some(id) => match state.sessions.witness(id, pack_id) {
             Ok(()) => None,
+            Err(_) if !exports_enabled => None,
             Err(err) => Some(status_json(
                 StatusCode::BAD_REQUEST,
                 json!({"reason": err.to_string()}),
@@ -3037,6 +3045,83 @@ mod tests {
         assert_eq!(
             body["reason"],
             "exports_dir is not configured for this node"
+        );
+    }
+
+    /// Review B3 post-merge F8: a stale/unknown session header is IGNORED
+    /// on a viewer-only node (best-effort, as the header docs promise) but
+    /// REFUSED with 400 on an export-enabled node (provenance must be
+    /// complete). A viewer-only T3 pack still 403s regardless of the header.
+    #[tokio::test]
+    async fn viewer_only_ignores_unknown_session_but_export_node_refuses_it() {
+        let bogus = "deadbeefdeadbeefdeadbeefdeadbeef";
+
+        // Viewer-only node (exports_dir: None): the T0/T1 serve proceeds
+        // even with a stale session header — the registry is unreachable.
+        let viewer_pack = create_pack("f8-viewer-src.gpkg", Some(Tier::T1));
+        let viewer_id = viewer_pack.id.clone();
+        let viewer = router(test_node(vec![viewer_pack]), &ServerConfig::default());
+        let response = viewer
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/packs/{viewer_id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(SESSION_HEADER, bogus)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "a viewer-only node ignores an unknown session header"
+        );
+
+        // Viewer-only T3 pack: the tier floor still refuses (403), the
+        // stale header changes nothing.
+        let viewer_t3 = create_pack("f8-viewer-t3.gpkg", Some(Tier::T3));
+        let t3_id = viewer_t3.id.clone();
+        let viewer_t3_app = router(test_node(vec![viewer_t3]), &ServerConfig::default());
+        let response = viewer_t3_app
+            .oneshot(
+                Request::get(format!("/api/packs/{t3_id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(SESSION_HEADER, bogus)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // Export-enabled node: the SAME stale header is refused loudly (400)
+        // — an unwitnessed pack could be omitted from an export source set.
+        let export_pack = create_pack("f8-export-src.gpkg", Some(Tier::T1));
+        let export_id = export_pack.id.clone();
+        let export_app = router(
+            test_node(vec![export_pack]),
+            &ServerConfig {
+                exports_dir: Some(temp_path("f8-export-dir")),
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("secret-token".into()),
+                ..ServerConfig::default()
+            },
+        );
+        let response = export_app
+            .oneshot(
+                Request::get(format!("/api/packs/{export_id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(SESSION_HEADER, bogus)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "an export-enabled node refuses an unknown session on a source serve"
         );
     }
 

@@ -44,6 +44,16 @@ use std::sync::Mutex;
 /// session. A non-breaking SDK addition: requests without it are served
 /// exactly as before, but the packs they touch are witnessed by no
 /// session and therefore can never appear in an export's source set.
+///
+/// Two serve-time modes (review B3 post-merge F8):
+/// - **Export-enabled node:** a source-data serve MUST carry a KNOWN, open
+///   session; an unknown/closed header is refused with 400 (provenance
+///   must be complete — a silently-unwitnessed pack could be omitted from
+///   an export's source set).
+/// - **Viewer-only node** (`exports_dir: None`): there is no session
+///   registry to witness into (issuance 503s), so a present header is
+///   IGNORED best-effort — the serve proceeds. An unknown header is never
+///   an error here.
 pub const SESSION_HEADER: &str = "x-geobase-session";
 
 /// One session's node-kept record: the operator it was issued to and the
