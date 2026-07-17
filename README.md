@@ -79,11 +79,30 @@ the release-scope question ("what ships in 1.0"), see
 [`docs/RELEASE-DEFINITION.md`](docs/RELEASE-DEFINITION.md) (RATIFIED
 2026-07-16).
 
+## Project workflow & canonical documents
+
+Source-of-truth hierarchy (full rules in [`docs/RELEASE-DEFINITION.md`](docs/RELEASE-DEFINITION.md)):
+
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — **phase-acceptance status authority** (the 10-phase spine).
+- [`PLAN_1.0.md`](PLAN_1.0.md) — the working plan to the 1.0 line: task detail, dependencies, verification, decision gates.
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — every recorded decision, owner ratifications included.
+- [`docs/ROADMAP.yaml`](docs/ROADMAP.yaml) — machine-readable index + exact session resume point, **subordinate** to the three above; refreshed at each true-up.
+
+Session workflow (Claude Code): `/pickup` resumes from the documented state;
+`/trueup` verifies, reconciles docs, commits, pushes, and stops cleanly
+(definitions in [`.claude/commands/`](.claude/commands/)). Session handoffs
+live in `docs/handoffs/` (gitignored, local-only by design — the repo is the
+Heart; process notes stay local). Superseded documents are **not** moved:
+they carry an in-file `STATUS` banner pointing at their successor (physical
+reorganization is deferred to post-1.0 by decision gate DG-5 — see
+[`MANIFEST.md`](MANIFEST.md)).
+
 ## Licensing
 
 - **Code:** Apache-2.0 (see [`LICENSE`](LICENSE)).
 - **TSDF framework content** vendored under `spec/tsdf/` remains **CC-BY-NC-SA 4.0**;
   it is not relicensed by inclusion. See [`spec/tsdf/ATTRIBUTION.md`](spec/tsdf/ATTRIBUTION.md).
 
-Geospatial **data** is never committed to this repository. Secure GeoPackages,
-LiDAR, and imagery live outside version control.
+Real geospatial **data** is never committed to this repository — secure
+GeoPackages, LiDAR, and imagery live outside version control. The only
+exception is the small synthetic CI test fixtures under `data/fixtures/`.

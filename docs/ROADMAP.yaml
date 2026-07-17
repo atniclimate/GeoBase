@@ -1,0 +1,237 @@
+# GeoBase — machine-readable roadmap index + session resume point
+#
+# SUBORDINATION (read first):
+#   - Phase-ACCEPTANCE status authority: docs/ROADMAP.md (human-ratified; B8
+#     is the sole acceptance act for the combined 1.2+1.3 gate).
+#   - Task detail, verification requirements, and dependency authority:
+#     PLAN_1.0.md (Phase 0 / A / B / C items).
+#   - Decision records: docs/DECISIONS.md. Release scope: docs/RELEASE-DEFINITION.md.
+#   - This file NEVER overrides those documents. It is a generated-by-hand
+#     index kept congruent at each /trueup so a fresh session (or automation)
+#     can locate the exact resume point without parsing prose. If this file
+#     and the documents above disagree, the documents win and this file is
+#     corrected in the next commit.
+#
+# Statuses here mean ENGINEERING state ("gate green"), never acceptance.
+
+schema_version: 1
+last_trueup: "2026-07-16"
+verified_green_commit: "6d4a632"  # all 5 workflows green (CI, Render Gate, GeoPack Gate, License Audit, Pages)
+
+project:
+  name: GeoBase
+  purpose: >
+    Offline-first sovereign geospatial platform for Tribal Nations: T0 terrain
+    baseline, TSDF-tiered layer packages (GeoPacks), SoLO mini-apps (RStep),
+    ceremony-gated zero-source-disclosure exports.
+  current_state: >
+    Phases 0.1-1.1 accepted-complete (docs/ROADMAP.md). Phase 1.2+1.3
+    engineering (PLAN Phase B) in progress: B1-B3 done (sovereign
+    RecordedConsentGate merged + post-merge remediation PR #5 merged at
+    d30c46b); B4.1 owner receipts + contract freeze done (DECISIONS.md
+    2026-07-16; commit 6d4a632). B4.2 is next.
+  end_state: docs/RELEASE-DEFINITION.md  # RATIFIED 2026-07-16 — the 1.0 line
+  success_criteria:
+    - Each phase's observed acceptance gate in docs/ROADMAP.md
+    - B8 combined acceptance run (owner-observed; the single ROADMAP/PROCESS-MAP flip)
+  non_goals:
+    - No cloud-terrain dependency (no Cesium Ion)
+    - Digital-twin / heavy-render scope is non-gating 1.x backlog (DG-1)
+    - No T3 egress path, ever
+  constraints:
+    - Owner-reserved acts (acceptance flips, DG ratifications, scope changes,
+      PR merges) stop and ask Patrick
+    - Codex context limited to tracked repo content (AGENTS.md data gate);
+      adversarial reviews land only in C:\dev\_reviews\
+    - Green gates are engineering evidence, never acceptance
+  assumptions:
+    - Single-node, office-hardware deployment for the 1.0 line
+    - Class-C (OS/admin/physical) threats are operational scope, not software
+
+# The owner interview that gates the CURRENT major cycle (B4) is COMPLETE:
+# the B4.1 owner-receipts + contract-freeze sitting, 2026-07-16
+# (docs/DECISIONS.md "B4.1 owner receipts + contract freeze"). Confirmed
+# end-state/tradeoffs: rotate-on-revoke; attended pre-bind unlock; TipAnchor
+# (OS-protected default, configurable TPM NV/WORM); one roster; Argon2id
+# policy. The NEXT major cycles carry their own owner sittings (see gates).
+major_start_interview:
+  id: DG-START-B4
+  required: true
+  status: completed
+  completed_on: "2026-07-16"
+  record: docs/DECISIONS.md  # entry "B4.1 owner receipts + contract freeze (owner acts)"
+  trigger: before_b4_implementation
+  blocks_progress: false
+  required_outputs:
+    - confirmed_end_state          # RELEASE-DEFINITION (RATIFIED) + agreed B4 roadmap
+    - confirmed_success_criteria   # B4.2-B4.6 exit gates
+    - confirmed_non_goals          # B4/B4b/B5 boundaries (roadmap-agreed §6)
+    - accepted_tradeoffs           # rotate-on-revoke presence cost; unattended startup unsupported
+
+phases:
+  # Historical phases 0.1-1.1: accepted-complete per docs/ROADMAP.md (authority).
+  - id: PHASE-0
+    name: "Congruence & ratification (PLAN Phase 0 — docs before code)"
+    status: done
+  - id: PHASE-A
+    name: "Interim export guard + RStep gate harness (PLAN Phase A)"
+    status: done
+  - id: PHASE-B
+    name: "Sovereignty core (PLAN Phase B — ceremony, crypto, auth, egress proof)"
+    objective: "Turn TSDF policy into enforced mechanism; combined 1.2+1.3 acceptance readiness"
+    status: in_progress
+    dependencies: [PHASE-0, PHASE-A]
+    entry_criteria: ["Phase 0 ratifications done (DG-1, B2)", "Phase A guard + harness green"]
+    exit_criteria: ["B8 combined acceptance run observed by owner (sole acceptance act)"]
+    deliverables: ["Sovereign ceremony (done)", "Sealed metadata stores", "Operator auth", "Egress proof suites"]
+    risks: [RISK-001, RISK-002, RISK-003]
+    steps:
+      - id: B1
+        name: "DG-2 cipher spike"
+        status: done
+      - id: B2
+        name: "Ceremony process design (owner authority)"
+        status: done  # docs/CEREMONY-DESIGN.md, ratified 2026-07-16
+      - id: B3
+        name: "Sovereign CeremonyGate"
+        status: done  # merged b6b6bf1; post-merge remediation PR #5 merged d30c46b
+      - id: B4
+        name: "Sealed metadata stores (consent store + export ledger)"
+        objective: "Class-B at-rest protection of the two bounded T3 metadata artifacts"
+        status: in_progress
+        dependencies: [B1, B3]
+        validation:
+          - "KATs + byte-exact golden vector"
+          - "mutation/resource/fuzz refusals; fail-closed crash/anchor/custody states"
+          - "no application-created plaintext DB/WAL/journal/temp/backup for the two stores"
+          - "battery + RStep gate green; honest_residual test flips ONLY at B4.6"
+        recommended_agents:
+          - agent: "Claude Code director"
+            role: "architecture, sequencing, integration, owner-boundary enforcement"
+          - agent: "Codex gpt-5.6-sol (adversary wrapper)"
+            role: "adversarial review of every sub-phase exit; spec review BEFORE code for B4.2 grammar"
+            independent_review: true
+        microtasks:
+          - id: TASK-B4.1
+            action: "Owner receipts + contract freeze + doc reconciliation"
+            status: done  # DECISIONS.md 2026-07-16; commit 6d4a632
+          - id: TASK-B4.2-SPEC
+            action: >
+              Draft the canonical envelope binary v1 grammar as a tracked spec
+              (exact field widths/order/lengths, total/header/slot/KDF caps,
+              artifact_id + expected kind/id binding, dek_generation,
+              genesis/overflow rules, hash algorithm + covered bytes, slot-wrap
+              AEAD/AAD layout, duplicate/unknown/trailing-byte rules,
+              fresh-nonce/RNG rules, opaque header slot ids) + a golden-vector
+              plan, then run a Codex adversarial review lane on the spec
+              BEFORE any implementation code.
+            status: not_started
+            dependencies: [TASK-B4.1]
+            evidence_required: ["tracked spec doc", "Codex review verdict in C:\\dev\\_reviews\\geobase\\"]
+            done_when: ["spec review passes with no BLOCK", "golden-vector byte layout frozen"]
+            recommended_agent: "director drafts; Codex adversary reviews"
+          - id: TASK-B4.2-CORE
+            action: "Zeroizing secret types; SealedMetadataStore over in-memory SQLite (authorizer/VFS denial of ATTACH/VACUUM INTO/backup; no public raw conn); cross-process artifact locks; durable same-dir ciphertext staging/replace (Win+Linux); TipAnchor crash state machine; two-person/two-store/two-slot zero-to-established ceremony. NO live wiring."
+            status: not_started
+            dependencies: [TASK-B4.2-SPEC]
+          - id: TASK-B4.3
+            action: "Attended pre-bind unlock + ledger wiring + publication recovery (unlock both envelopes, roster/anchor checks BEFORE recovery + bind)"
+            status: not_started
+            dependencies: [TASK-B4.2-CORE]
+          - id: TASK-B4.4
+            action: "Consent-store wiring + cross-process publication linearization (envelope lock replaces BEGIN IMMEDIATE; consent-before-ledger lock order)"
+            status: not_started
+            dependencies: [TASK-B4.3]
+          - id: TASK-B4.5
+            action: "Key lifecycle ceremonies + two-artifact recovery + rehearsed all-slots-lost re-establishment"
+            status: not_started
+            dependencies: [TASK-B4.4]
+          - id: TASK-B4.6
+            action: "Proof closure: full adversarial suites (Win+Linux), fence DevPlaintextCipher out of release, ONLY NOW flip honest_residual_..._until_b4 to a negative control"
+            status: not_started
+            dependencies: [TASK-B4.5]
+        decision_gates: []   # B4's owner gates were consumed at B4.1 (DG-START-B4)
+      - id: B4B
+        name: "Plaintext T3 staging closure (large-artifact backend)"
+        status: not_started
+        dependencies: [B4]
+        recommended_agents:
+          - agent: "Codex gpt-5.6-sol"
+            role: "page/VFS measurement spike + implementation offload; adversarial review lane"
+            independent_review: true
+        decision_gates:
+          - id: DG-B4B-SQLCIPHER
+            name: "Bounded SQLCipher owner exception (only if pure-Rust page/VFS measures inadequate)"
+            owner: Patrick
+            status: pending
+            blocks_progress: false
+      - id: B5
+        name: "Requester authentication (LocalOperator OS-peer + keychain; interim token retirement)"
+        status: not_started
+        dependencies: [B3]
+        validation:
+          - "PROMOTED B3 residuals as explicit negative-control gates (B6 depends): node-side session rollover; F4 timing + serve-liveness oracles; malicious-client-omits-pack; SDK same-session overlap"
+        decision_gates:
+          - id: DG-B5-RECEIPTS
+            name: "B5 owner-receipts sitting (identity/FIDO2 posture; assessment items #8-14 stay parked)"
+            owner: Patrick
+            status: pending
+            blocks_progress: true
+      - id: B6
+        name: "Adversarial-egress suite"
+        status: not_started
+        dependencies: [B4, B4B, B5]
+        recommended_agents:
+          - agent: "Codex-sol swarm (Workflow: finder lanes -> adversarial verify -> synthesis)"
+            role: "suite design + independent attack-path discovery"
+            independent_review: true
+      - id: B7
+        name: "Runtime network-denial harness"
+        status: not_started
+        dependencies: [B6]
+        recommended_agents:
+          - agent: "Claude Code director + Codex review lane"
+            role: "harness implementation; observed-behavior gate design"
+      - id: B8
+        name: "Combined acceptance run (M5) — owner-observed; THE acceptance flip"
+        status: not_started
+        dependencies: [B6, B7]
+        decision_gates:
+          - id: DG-B8-ACCEPT
+            name: "Owner observes the acceptance run; sole ROADMAP/PROCESS-MAP flip commit"
+            owner: Patrick
+            status: pending
+            blocks_progress: true
+  - id: PHASE-C
+    name: "Release readiness (PLAN Phase C — packaging, hardening, v1.0.0 tag)"
+    status: not_started
+    dependencies: [PHASE-B]
+    # Steps C1-C9 + gates DG-4/DG-5/DG-6: see PLAN_1.0.md §Phase C + §Decision Gates.
+
+risks:
+  - id: RISK-001
+    description: "Session-to-session drift: docs or memory contradict code/ROADMAP"
+    mitigation: "Plan-congruence scans in the battery; /trueup refreshes this file; ROADMAP.md stays sole acceptance authority"
+    detection: "congruence scan; adversarial review lanes"
+  - id: RISK-002
+    description: "Premature claim of the B3 raw-SQL residual being closed"
+    mitigation: "honest_residual_..._until_b4 test flips only at B4.6; stop-condition in handoff"
+    detection: "test suite; review lanes check claim language"
+  - id: RISK-003
+    description: "Gitignored/local material leaking into Codex prompts (sovereignty data gate)"
+    mitigation: "AGENTS.md contract; director-level gate; reviews land only in C:\\dev\\_reviews\\"
+    detection: "prompt review before every Codex invocation"
+
+resume:
+  current_phase: PHASE-B
+  current_step: B4
+  next_microtask: TASK-B4.2-SPEC
+  blockers: []
+  pending_decision_gates: []   # none block B4.2; DG-B5-RECEIPTS blocks B5 later
+  required_reading:
+    - docs/handoffs/b4-next-session-prompt.md   # local-only B4 playbook (gitignored)
+    - C:\dev\_reviews\geobase\2026-07-16_b4-roadmap-agreed.md   # agreed B4 plan (local)
+    - docs/DECISIONS.md   # 2026-07-16 entries, esp. B4.1 receipts
+    - docs/CEREMONY-DESIGN.md
+    - docs/THREAT-MODEL-1.2.md
+    - PLAN_1.0.md   # B4 item + Phase B sequence

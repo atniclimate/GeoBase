@@ -1,5 +1,12 @@
 # GeoBase-DDM bridge
 
+> **Currency note (2026-07-16):** §2/§3's phase-0.2 framing was written
+> before that phase landed. Phase 0.2 is **accepted-complete**
+> (`docs/ROADMAP.md`; gate artifact
+> `docs/verification/phase-0.2-terrain-45deg.png`) — the render path this
+> file says GeoBase "must prove" is proven, so the DDM seam described in §2
+> is consumable today. The rest of the contract and sync log stand unchanged.
+
 The interproject communication structure between ATNI-GeoBase (this
 repository) and the Dynamic Drought Module (DDM,
 `C:\dev\dynamic-drought-module`; live at
