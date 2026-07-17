@@ -743,11 +743,16 @@ struct ExportBodyFeature {
 
 /// The SINGLE public pre-authentication refusal reason (review B3
 /// post-merge F4, owner receipt Option B). Invalid-session, T3-floor, and
-/// bad-token failures are indistinguishable to an unauthenticated caller,
-/// closing the export-route session/tier/token oracle a tokenless loopback
-/// caller could otherwise read. The DETAILED, content-free cause is still
-/// written to the PROTECTED local ledger by the `record_*` helpers. The
-/// post-authentication consume-race branch is deliberately NOT genericized.
+/// bad-token failures return the same body and 503 audit-failure text, so
+/// the response CONTENT no longer discloses which pre-auth step refused,
+/// and no branch consumes the session or writes a product. The DETAILED,
+/// content-free cause is still written to the PROTECTED local ledger by the
+/// `record_*` helpers. The post-authentication consume-race branch is
+/// deliberately NOT genericized. Residual (remediation-review NOTE, B5
+/// scope): a live multi-pack session does catalog + current-tier reads that
+/// an invalid session skips, so the branches remain distinguishable by
+/// TIMING; the ratified §5.1 order forbids equalizing that here, and the
+/// serve-route session-liveness oracle is B5's authenticated-serve work.
 const PREAUTH_REFUSAL_PUBLIC_REASON: &str =
     "export refused before authentication (design §5.1) — provide a valid export session \
      and operator token, then retry";
