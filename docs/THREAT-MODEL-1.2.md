@@ -60,9 +60,26 @@ open mechanism choice is swept in (`docs/DECISIONS.md` 2026-07-16):
 6. A production cipher **refuses to open** an artifact stamped
    `UNENCRYPTED-DEV` — a dev-plaintext artifact never silently continues
    into production.
-7. **Multi-operator key wrapping remains OPEN** — whether several people
-   may open one node (N wrapped copies of the data key, still no master
-   key) is a sovereign choice the owner has explicitly not yet made.
+7. **Multi-operator key wrapping — RESOLVED (owner, 2026-07-16).**
+   Multi-slot **named custody**: each artifact's DEK is wrapped
+   independently under each enrolled custodian's Argon2id passphrase
+   (LUKS-style key slots; any one custodian unlocks alone; enrollment and
+   revocation are audited ceremonies; threshold unlock rejected for the
+   B4 era; still no master key). The B4.1 sitting froze the remaining
+   custody contracts: rotate-on-revoke (fresh DEK per artifact, all
+   retained custodians present), attended pre-bind unlock (unattended
+   production export startup unsupported at B4), one logical roster +
+   epoch across both stores, an independent `TipAnchor` for
+   anti-rollback (OS-protected default backend, configurable TPM
+   NV/WORM), and the Argon2id cost/slot/passphrase policy. Receipts:
+   `docs/DECISIONS.md` 2026-07-16 (storage-key custody + B4.1 entries).
+
+The at-rest **software claim** is bounded honestly: no
+**application-created** plaintext database, WAL, journal, temp, or backup
+artifact exists for the two sealed stores. It is never "plaintext cannot
+reach OS-managed swap, hibernation, or crash dumps" — those are Class C
+(§2), and best-effort zeroization narrows that exposure without
+converting it into a software claim.
 
 Algorithm specifics — XChaCha20-Poly1305, Argon2id and its parameters,
 passphrase vs keyfile modes, envelope/header format — are **DG-2's

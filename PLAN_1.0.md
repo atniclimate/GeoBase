@@ -260,7 +260,8 @@ matching dated `docs/DECISIONS.md` entry. *(History: committed in DRAFT
 **DG-2 status (2026-07-16): RESOLVED — CONFIRMED.** Pure-Rust
 XChaCha20-Poly1305 + Argon2id whole-file envelope for the two bounded T3
 metadata artifacts (export ledger + consent store), passphrase-primary,
-anti-rollback sequence headers, defined export linearization — plus
+continuity sequence headers + an independent `TipAnchor` for
+anti-rollback (B4.1 receipt), defined export linearization — plus
 **B4b**, the plaintext-staging closure, inserted as a condition precedent
 to B6/B8. See `docs/DECISIONS.md` 2026-07-16 and
 `docs/CEREMONY-DESIGN.md` §10.
@@ -666,16 +667,40 @@ suite; the Phase A harness re-run asserting the sovereign ceremony record.
     extra-file rejection, F5 SQL insert triggers, F6 taxonomy, F7
     matching + CLI, F8 witness proof hash, F9 exact process/basis +
     negative controls, F10 hygiene), re-review pending.
-- [ ] **B4 — Real `AtRestCipher`.** Implement the DG-2 choice behind the
-  fail-closed seam; every T3-producing write path (export ledger, future
-  sim/LiDAR outputs) routes through it; remove `GEOBASE_DEV_UNENCRYPTED` or
-  hard-gate it out of release builds.
-  - *Touches:* `crates/geobase-gpkg/src/cipher.rs`;
-    `crates/geobase-engine-desktop/src/server.rs` (the
-    `GEOBASE_DEV_UNENCRYPTED` branch near line 118); the ledger write path.
-  - *Verify:* cipher unit tests + ledger write-path test; the fail-closed
-    contract test still green; release build refuses the dev-plaintext path.
-  - *Deps:* B1.
+- [ ] **B4 — Sealed metadata stores (task rewritten 2026-07-16 per the
+  adversarially agreed roadmap,
+  `C:\dev\_reviews\geobase\2026-07-16_b4-roadmap-agreed.md`, and the B4.1
+  owner receipts, `docs/DECISIONS.md` 2026-07-16).** Seal exactly the two
+  bounded T3 metadata artifacts — consent store + export ledger — under
+  the DG-2 envelope (pure-Rust XChaCha20-Poly1305 + Argon2id, multi-slot
+  named custody, independent per-artifact DEKs, independent `TipAnchor`
+  anti-rollback). The enforcement boundary is a store-level
+  `SealedMetadataStore` (in-memory SQLite, durable staged reseal,
+  cross-process envelope locks, restricted SQL), **not** a generic
+  `open → Vec<u8>` byte cipher — the whole-file seam is confirmed for
+  these two small stores only and is deliberately **not** promised for
+  large artifacts (that backend is B4b's decision). Sequence, each
+  sub-phase exit-gated: **B4.1** owner receipts + contract freeze + doc
+  reconciliation (DONE 2026-07-16) → **B4.2** envelope grammar/golden
+  vector + custody bootstrap + sealed-store core (no live wiring) →
+  **B4.3** attended pre-bind unlock + ledger wiring + publication
+  recovery → **B4.4** consent-store wiring + cross-process publication
+  linearization (consent-before-ledger lock order) → **B4.5** key
+  lifecycle ceremonies + two-artifact recovery + rehearsed
+  re-establishment → **B4.6** proof closure: fence `DevPlaintextCipher`
+  out of release, and ONLY THEN flip
+  `honest_residual_a_correctly_hashed_witnessed_forgery_authorizes_until_b4`
+  into a negative control. No milestone before B4.6 claims the raw-SQL
+  residual closed.
+  - *Touches:* `crates/geobase-gpkg` (new sealed-store/envelope/custody
+    modules; `cipher.rs` seam; `consent_store.rs` open path);
+    `crates/geobase-engine-desktop` (`server.rs` boot/bind order,
+    `export.rs` ledger open + recovery); the record-consent CLI.
+  - *Verify:* KATs + byte-exact golden vector; mutation/resource/fuzz
+    refusals; every crash/anchor/custody state fail-closed; no
+    application-created plaintext DB/WAL/journal/temp/backup for the two
+    stores; battery + RStep gate green.
+  - *Deps:* B1; B4.1 receipts (recorded).
 - [ ] **B4b — Plaintext T3 staging closure (condition precedent to B6/B8;
   added 2026-07-16).** Close the recorded plaintext staging paths —
   `ingest()` and `package()` write plaintext staging GPKGs for

@@ -731,6 +731,117 @@ under audit outage, and needs its own ratified action/retention semantics.
 If durable malformed-transport auditing is wanted, design it after the B5
 OS-peer boundary rather than overloading `export.refused` now.
 
+## 2026-07-16 — B4.1 owner receipts + contract freeze (owner acts)
+
+**Trigger:** the B4.1 sitting held immediately after PR #5 (B3 post-merge
+remediation) merged to main at `d30c46b` (all five workflows green). Agenda
+and options came from the adversarially agreed B4 roadmap
+(`C:\dev\_reviews\geobase\2026-07-16_b4-roadmap-agreed.md`, verdict
+GO-WITH-CHANGES from a three-lane Codex-sol swarm). Per that synthesis, B4
+implementation does not start until these receipts exist and the normative
+documents are reconciled. All six areas were put to the owner with framed
+options + recommendation; nothing below was decided by engineering.
+
+**Q1 — Revocation semantics — RECEIPT: rotate-on-revoke.** `slot.revoked`
+generates a fresh DEK for **each** artifact, re-encrypts both store bodies,
+omits the revoked slot, and re-wraps each fresh DEK for **every retained
+custodian — all must be present** (no master KEK exists; GeoBase may not
+reconstruct another person's passphrase). If rotation cannot complete, the
+node records a differently named access warning and stays fail-closed; it
+never claims cryptographic revocation. Stated unavoidable residual: a
+former custodian can still read old envelope **copies** retained from
+before revocation; historical possession cannot be cryptographically
+recalled.
+
+**Q2 — Boot/unlock supply — RECEIPT: attended pre-bind ceremony.** One
+custodian supplies a storage-only secret once — trusted desktop prompt for
+desktop operation, controlling-TTY prompt with echo disabled for attended
+headless. Both stores unlock, publication recovery completes, and only then
+may an export-enabled node bind. Environment-variable and argv secrets are
+unacceptable production defaults; automatic OS-keychain unlock is rejected
+(it would silently make the OS/device a storage custodian and blur the
+ratified lost-key model). **Production unattended export startup is
+unsupported at B4** — cancel, bad secret, corrupt/unknown envelope, roster
+mismatch, missing required store, lost anchor, or recovery failure leaves
+the node unbound (viewer-only behavior stays explicitly bounded). CI uses
+an injected test-only ephemeral provider. The ratified advanced keyfile
+mode remains explicit, removable, never colocated or auto-discovered, and
+requires an owner-approved custody procedure.
+
+**Q4 — Anti-rollback — RECEIPT: independent TipAnchor ADOPTED.** The
+in-envelope `sequence + previous-envelope hash` is chain **continuity
+only**; it cannot detect wholesale replacement with an older valid envelope
+(consent-resurrection replay). B4 therefore carries an independent
+`TipAnchor` keyed by stable random `artifact_id`, holding at least
+`(artifact_id, sequence, envelope_hash)`, with a pending/committed crash
+protocol under the artifact lock. Contradictory, missing, forked, or older
+anchor state fails closed for ceremony. The anchor is an **integrity role
+only** — never a DEK/KEK, B5 credential, or recovery key. **Backing
+(Q4b): OS-protected integrity state is the default backend** (a protection
+boundary distinct from the vault files; defends the Class-B vault-file
+writer; OS admin remains Class C), behind a pluggable `TipAnchor` seam
+**configurable for TPM NV and separately-custodied WORM checkpoint
+backends for highly secure T3 deployments**. Scope note recorded at the
+sitting: the seam + config surface are B4 deliverables, but only the
+OS-protected backend is a B4.6 exit requirement; the TPM NV and WORM
+backends are ratified configuration extensions implemented as their own
+later work items.
+
+**Q5 — Roster topology — RECEIPT: one logical roster.** One named-custodian
+membership set and one roster epoch across BOTH stores; one attended
+passphrase entry unlocks both. Cryptographic material stays fully
+independent per artifact (own DEK, salt/KEK, wrap nonce, wrapped-DEK bytes,
+body nonce, artifact id, sequence). Enrollment, revocation, rotation, and
+roster repair are recoverable **two-artifact ceremonies** with one
+operation id, strict lock order, prepared/committed states, idempotent
+startup reconciliation, and no plaintext coordinator or hidden third
+authority.
+
+**Q6 — Argon2id policy — RECEIPT: lane proposal ratified.** Engineering-
+mandatory bounds (not owner choices): Argon2id v1.3, 32-byte KEK, ≥16-byte
+random salt, per-slot stored parameters accepted only inside a versioned
+pre-authentication policy envelope so attacker-controlled headers cannot
+drive unbounded memory/work. Owner-ratified profile: **floor 64 MiB /
+t=3 / p=1; enrollment calibrates upward toward ~0.5–1 s on the slowest
+supported office machine; hard caps 256 MiB / t≤10 / p≤4; maximum 8
+slots.** Slot-selection UX: **operator-selected opaque slot id** (the
+prompt lists enrolled opaque ids; the id is not a secret and may be written
+on the custody card; exactly one KDF run per attempt; no human identities
+in the clear header; unbounded try-all rejected). Passphrase profile:
+**tool-generated 6-word diceware** (EFF large wordlist, ~77 bits;
+regenerate-until-memorable, never hand-picked; canonical encoding =
+lowercase words, single spaces, Unicode NFC, UTF-8 bytes). KDF/passphrase
+upgrade ceremony: at an attended unlock, a slot below the ratified floor
+(or on custodian request) is re-derived and re-wrapped **for that slot
+only** (body DEK untouched, no other custodian required), audited as
+`slot.upgraded`.
+
+**Honest-residual wording (normative, not a new choice):** the B4 exit
+receipt and threat model use the synthesis §5 residual statement verbatim
+(TipAnchor branch, per Q4). The software claim is "no application-created
+plaintext database, WAL, journal, temp, or backup artifact for these two
+stores" — never "plaintext cannot reach OS-managed swap or crash dumps";
+best-effort zeroization narrows Class-C exposure but does not convert it
+into a B4 claim.
+
+**Doc reconciliation (same sitting, director-drafted, owner-ratified):**
+`docs/THREAT-MODEL-1.2.md` §3.7's "multi-operator key wrapping remains
+OPEN" resolved to the ratified multi-slot named custody + these receipts;
+`docs/CEREMONY-DESIGN.md` §9/§10 anti-rollback wording corrected (internal
+chain = continuity; anti-rollback = TipAnchor); `PLAN_1.0.md` B4 item
+rewritten to the agreed B4.1–B4.6 sequence with the whole-file seam
+explicitly NOT promised for large artifacts. The
+`honest_residual_a_correctly_hashed_witnessed_forgery_authorizes_until_b4`
+test flips **only at B4.6**. No acceptance status changed; B8 remains the
+sole acceptance act.
+
+**Strongest surviving objection:** rotate-on-revoke's full-roster presence
+requirement means an emergency revocation can leave the node fail-closed
+until every retained custodian attends — accepted deliberately: the
+alternative makes `revoked` a false claim in exactly the
+distrusted-custodian case, and the fail-closed warning state is the honest
+representation of an incomplete ceremony.
+
 **Remediation:** branch `fix/b3-postmerge-remediation` lands F1, F2,
 F4(B), F5(B), F6, F7, F8, T-A, and a T-B regression pin. **F3 downgraded**
 to a diagnostic-only startup message — mandatory pre-bind publication

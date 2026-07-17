@@ -359,9 +359,13 @@ policy covers both:
   only**; keys stored separately; never networked; no in-product
   consent-store export path exists, ever (it is T3). Every artifact
   carries a monotonic sequence/head; **restore enters fail-closed
-  reconciliation if the backup's head is behind the node's last-known
-  head** (anti-rollback: an old backup must not resurrect revoked
-  consent). This is availability backup; after key loss it is ciphertext
+  reconciliation if the backup's head is behind the committed
+  `TipAnchor` tip** (anti-rollback: an old backup must not resurrect
+  revoked consent). The node's "last-known head" lives in the
+  independent anchor (B4.1 receipt, `docs/DECISIONS.md` 2026-07-16) —
+  the in-envelope sequence/hash alone proves continuity, not freshness,
+  because a wholesale replacement with an older **valid** envelope
+  verifies. This is availability backup; after key loss it is ciphertext
   garbage **by design**.
 
 ## 10. DG-2 interface assumptions (confirmed 2026-07-16)
@@ -371,7 +375,14 @@ XChaCha20-Poly1305 file envelope, Argon2id passphrase-primary (keyfile as
 a documented advanced mode, never stored beside artifacts), per-artifact
 locks with serialized writers, synchronous reseal before success, and a
 versioned AEAD-authenticated header carrying a **monotonic sequence +
-previous-envelope hash** (feeds §9 anti-rollback). Export linearization:
+previous-envelope hash**. The header chain provides **continuity only**;
+§9's anti-rollback property comes from the **independent `TipAnchor`**
+ratified at the B4.1 sitting (`docs/DECISIONS.md` 2026-07-16):
+`(artifact_id, sequence, envelope_hash)` held in a protection boundary
+the vault-file attacker cannot roll back equally — OS-protected
+integrity state by default, configurable TPM NV / WORM checkpoint
+backends — integrity role only, never a key; older/forked/missing
+anchor state fails closed for ceremony. Export linearization:
 snapshot the consent-store sequence at authorization, revalidate at the
 publication point (§6 step 3/4 boundary), and record the sequence in
 `export.ceremony` — a revocation committing after that point governs the
