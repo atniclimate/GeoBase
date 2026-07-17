@@ -26,6 +26,9 @@ next major task afterward.
 7. **Commit** in few logical commits; **push**; verify push (`git status -sb`
    shows in-sync) and confirm CI workflows green on the pushed SHA
    (`gh run list --branch main`). If push fails: keep commits, record the exact
-   error + the command to retry — never report success.
+   error + the command to retry — never report success. Pushing is a
+   **director-lane act** under the standing workflow; offload/review agents
+   never push to remotes (`AGENTS.md` data gate) and PR **merges** stay
+   owner-reserved regardless of lane.
 8. **Stop** at the documented resume point. Owner-reserved acts (acceptance
    flips, DG ratifications, merges, scope changes) are never part of /trueup.

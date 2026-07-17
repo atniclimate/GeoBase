@@ -2,7 +2,7 @@
 
 Resume work from the canonical resume point. Read before changing anything.
 
-1. Confirm repo root `C:\dev\GeoBase`, branch, and remote state
+1. Confirm you are at the GeoBase repo root, on the right branch, with remote state known
    (`git status -sb`, `git log --oneline -5`, `git fetch` if network is fine).
 2. Read `docs/ROADMAP.yaml` — the machine-readable index. Its `resume:` block
    names the current phase/step and the exact next microtask. **Subordination
