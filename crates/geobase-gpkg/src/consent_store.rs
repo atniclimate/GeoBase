@@ -37,19 +37,26 @@
 //! supersession); effects apply at the next authorization check —
 //! authorization results are never cached.
 //!
-//! ## Honest residual — the raw-SQL boundary (review B3 F5, B4 seals it)
+//! ## Honest residual — the raw-SQL boundary (review B3 F5/r3 F2, B4 seals it)
 //!
 //! `GeoPackage::conn()` is public, so the store defends its own surface:
 //! append-only triggers, insert-shape triggers, no-resurrection status
 //! folding, and (for witnessed-verbal records) a proof-core commitment
 //! recomputed and enforced on the authorization read path. What a local
 //! plaintext SQLite file CANNOT prevent is a **perfectly-shaped** forgery
-//! written through raw SQL — for a `tribal_signed` record the evidence
-//! hash is the hash of an EXTERNAL document, so no local recomputation
-//! can distinguish a fabricated-but-well-formed record from a genuine
-//! one. That residual is inherent to the storage medium, not to this
-//! schema; B4 (sealed/encrypted store) closes the raw-write channel
-//! itself.
+//! written through raw SQL — and that residual covers **BOTH evidence
+//! kinds** (review B3-r3 F2). For a `tribal_signed` record the evidence
+//! hash binds an EXTERNAL document no local recomputation can check. For
+//! an `individual_witnessed` record the §9 commitment is an UNKEYED
+//! digest over the stored detail: it binds detail to hash (integrity —
+//! corruption and detail-edited-under-the-hash refuse, and compaction
+//! can later verify what it carries forward), but a raw-SQL writer who
+//! supplies both the fabricated detail AND its correctly computed digest
+//! authorizes. The commitment is **not writer authentication** — nothing
+//! unkeyed can be. That residual is inherent to the storage medium, not
+//! to this schema; B4 (sealed/encrypted store) closes the raw-write
+//! channel itself. `honest_residual_a_correctly_hashed_witnessed_forgery
+//! _authorizes_until_b4` in this module's tests pins the exact boundary.
 
 use std::path::{Path, PathBuf};
 
@@ -903,10 +910,13 @@ fn rebuild_evidence(row: &StoredAgreement, now: UtcInstant) -> Result<ConsentBas
                 .ok_or("missing verification_attestation")?;
             // §9 binding, enforced on the authorization READ path (review
             // B3 F8): the retained proof-core hash must equal the
-            // commitment recomputed over the stored detail. A record whose
-            // hash does not bind its detail — a raw-SQL forgery with a
-            // plausible 64-hex hash, or detail edited out from under the
-            // hash — never authorizes.
+            // commitment recomputed over the stored detail. This is an
+            // INTEGRITY check, not writer authentication (review B3-r3
+            // F2): a record whose hash does not bind its detail —
+            // corruption, or detail edited out from under the hash —
+            // never authorizes; a raw-SQL forger who computes the correct
+            // unkeyed digest over fabricated detail passes it (the
+            // documented raw-SQL residual, closed by B4's sealed store).
             let stored_hash = row
                 .evidence_hash
                 .as_deref()
@@ -968,7 +978,9 @@ impl std::fmt::Debug for ConsentStoreLock {
 /// The §9 witnessed-verbal proof-core commitment: a domain-separated hash
 /// over the stored witnesses serialization + attestation. ONE definition,
 /// used by the writer (to retain) and by the authorization read path (to
-/// enforce — review B3 F8).
+/// enforce — review B3 F8). UNKEYED by design honesty (review B3-r3 F2):
+/// it proves detail/hash consistency (integrity, compaction), never who
+/// wrote the row — writer authentication is B4's sealed store.
 fn witnessed_commitment_hex(witnesses_json: &str, attestation: &str) -> String {
     let commitment = format!("witnessed-verbal-v1\n{witnesses_json}\n{attestation}");
     Sha256Digest::of_bytes(commitment.as_bytes()).to_hex()
@@ -1462,13 +1474,14 @@ mod tests {
         assert_eq!(refusal, MatchRefusal::Revoked("a1".into()));
     }
 
-    /// Review B3 F5/F8: a WELL-SHAPED raw-SQL forgery — plausible operator
-    /// string, 64-hex proof hash, non-thin evidence — passes every insert
-    /// trigger, but for a witnessed-verbal record the authorization read
-    /// path recomputes the §9 commitment over the stored detail and
-    /// refuses on mismatch. (The equivalent signed-kind forgery is the
-    /// documented raw-SQL residual — its hash binds an EXTERNAL document
-    /// no local recomputation can check; B4 seals the channel.)
+    /// Review B3 F5/F8 — the INTEGRITY half of the §9 commitment: a
+    /// raw-SQL row whose stored hash does NOT bind its stored detail
+    /// (plausible 64-hex value, detail fabricated separately) refuses at
+    /// match time. This proves detail/hash binding — corruption and
+    /// detail-edited-under-the-hash can never authorize. It does NOT
+    /// prove forgery resistance: the companion test below shows a forger
+    /// who computes the correct unkeyed digest authorizes (the documented
+    /// raw-SQL residual, review B3-r3 F2 — B4 seals the channel).
     #[test]
     fn well_shaped_witnessed_forgery_refuses_on_commitment_mismatch() {
         let dir = temp_dir("wellshaped");
@@ -1520,6 +1533,67 @@ mod tests {
             }
             other => panic!("expected EvidenceIncomplete on commitment mismatch, got: {other:?}"),
         }
+    }
+
+    /// Review B3-r3 F2 — the HONEST RESIDUAL, pinned as a test so it can
+    /// never silently be mistaken for a closed hole: a raw-SQL forger who
+    /// controls witnesses, attestation, AND evidence_hash computes the
+    /// publicly computable §9 commitment over fabricated detail — and the
+    /// record AUTHORIZES. The unkeyed commitment is integrity, not writer
+    /// authentication; the raw-write channel itself is what B4's sealed
+    /// store closes. **B4 must flip this assertion** — when raw writes
+    /// can no longer reach an authorizable store, this test's forgery
+    /// must refuse, and this test must be rewritten to prove that.
+    #[test]
+    fn honest_residual_a_correctly_hashed_witnessed_forgery_authorizes_until_b4() {
+        let dir = temp_dir("honest-residual");
+        let s = store(&dir);
+        let gpkg = GeoPackage::open(&s.path()).unwrap();
+        let witnesses_json = "[\"Fake Witness A\",\"Fake Witness B\"]";
+        let attestation = "fabricated attestation text";
+        // The commitment is UNKEYED — anyone with the schema can compute
+        // it. That is exactly why it cannot authenticate the writer.
+        let correct_hash = super::witnessed_commitment_hex(witnesses_json, attestation);
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_agreements (agreement_id, kind, source_scope, \
+                 product_class, product_tier, authority_of_record, requester_binding, \
+                 evidence_hash, recorded_by) \
+                 VALUES ('forged-well', 'individual_witnessed', '[\"forged-pack\"]', \
+                 'painted-opportunity-shapefile', 'T2', 'Fabricated Authority', ?1, ?2, \
+                 'local-operator:forged')",
+                rusqlite::params![operator().audit_string(), correct_hash],
+            )
+            .unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_evidence (agreement_id, witnesses, \
+                 verification_attestation) \
+                 VALUES ('forged-well', ?1, ?2)",
+                rusqlite::params![witnesses_json, attestation],
+            )
+            .unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO consent_events (event_id, agreement_id, event_kind, recorded_at) \
+                 VALUES ('f1f1f1f1', 'forged-well', 'recorded', '2026-07-16T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        let matched = s
+            .match_agreement(
+                &set(&["forged-pack"]),
+                &operator(),
+                "painted-opportunity-shapefile",
+                now(),
+            )
+            .unwrap()
+            .expect(
+                "DOCUMENTED RESIDUAL (B3): a correctly hashed raw-SQL witnessed forgery \
+                 authorizes until B4 seals the store — if this now REFUSES, B4 machinery \
+                 has landed and this test must be rewritten to prove the closure",
+            );
+        assert_eq!(matched.agreement_id, "forged-well");
     }
 
     /// A store-side record whose evidence became unreadable AFTER a valid
