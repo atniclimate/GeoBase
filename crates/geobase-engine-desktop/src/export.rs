@@ -204,6 +204,49 @@ pub(crate) enum CrashPoint {
     Renamed,
 }
 
+/// Test-only interleaving seam (review B3-r3 F3): fired at the
+/// publication point — after the consent-store publication lock is held,
+/// before the source-state coherence check and the ledger seal — so a
+/// test can reclassify or replace a source pack at exactly the
+/// authorization/publication boundary and prove the publication aborts.
+/// Hooks filter on the product they were armed for.
+#[cfg(test)]
+pub(crate) mod export_test_hooks {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn Fn() + Send + Sync>;
+    // Keyed by product so concurrently running tests never collide.
+    static AT_PUBLICATION_POINT: Mutex<Option<HashMap<String, Hook>>> = Mutex::new(None);
+
+    pub(crate) fn arm(product: &str, hook: Hook) {
+        AT_PUBLICATION_POINT
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(product.into(), hook);
+    }
+
+    pub(crate) fn disarm(product: &str) {
+        if let Some(map) = AT_PUBLICATION_POINT.lock().unwrap().as_mut() {
+            map.remove(product);
+        }
+    }
+
+    pub(crate) fn at_publication_point(product: &str) {
+        // Fire outside the registry lock: the hook does file/SQLite work.
+        let armed = AT_PUBLICATION_POINT
+            .lock()
+            .unwrap()
+            .as_mut()
+            .and_then(|map| map.remove(product));
+        if let Some(hook) = armed {
+            hook();
+            arm(product, hook);
+        }
+    }
+}
+
 /// Append a GENERIC `export.refused` audit row for a request that failed
 /// the interim operator token guard (A1) — refused BEFORE the request body
 /// was parsed, so there is no trusted product/requester to record and none
@@ -249,23 +292,24 @@ fn refusal_observed_at() -> Result<String, ExportError> {
         })
 }
 
-/// Append an `export.refused` row for a governance refusal decided BEFORE
-/// the ceremony seam ran (B3: an absent/invalid/unwitnessed export
-/// session, design §4 — "no valid session → refuse"). Same fail-closed
-/// posture as every T3 ledger write.
-pub fn record_declined_refusal(
+/// Append a GENERIC `export.refused` row for a governance refusal decided
+/// BEFORE the requester was authenticated (design §5.1 steps 1–2: session
+/// resolution and the T3 floor run first — review B3-r3 F4). Nothing
+/// request-controlled is attributed: no claimed product, no claimed
+/// identity — the row records that a pre-authentication refusal happened
+/// and why, preserving review H1's audit posture under the ratified
+/// floor-first order. Same fail-closed posture as every T3 ledger write.
+pub fn record_preauth_refusal(
     cipher: &dyn geobase_gpkg::cipher::AtRestCipher,
     exports_dir: &Path,
-    product: &str,
-    requester: &ExportIdentity,
     reason: &str,
 ) -> Result<(), ExportError> {
     let (tsdf_version, tsdf_origin) = tsdf_info()?;
     let ledger = open_ledger(exports_dir, &tsdf_version, &tsdf_origin, cipher)?;
     ledger.append_audit(&geobase_gpkg::AuditEntry {
-        dataset_id: product.to_string(),
+        dataset_id: "(pre-authentication export attempt)".into(),
         action: "export.refused".into(),
-        actor: requester.audit_string(),
+        actor: "(unverified — refused before authentication, design §5.1)".into(),
         tsdf_version,
         tsdf_source_origin: tsdf_origin,
         details: serde_json::json!({ "reason": reason, "observed_at": refusal_observed_at()? }),
@@ -527,6 +571,74 @@ fn publish(
         }
     };
     let revalidated_sequence = publication_guard.sequence;
+    #[cfg(test)]
+    export_test_hooks::at_publication_point(&request.product);
+    // Source-state coherence at the publication point (review B3-r3 F3):
+    // the witness tiers were resolved at authorization time and the staged
+    // sidecar hashed the bytes through separate short-lived opens — nothing
+    // above proves the artifact the sealed row will describe is still the
+    // one that was authorized. Re-resolve tier AND content identity here,
+    // immediately before the seal: a pack reclassified or replaced since
+    // authorization ABORTS the publication (fail-closed refusal row) — the
+    // ledger and sidecar must never pair one snapshot's tier with another
+    // snapshot's bytes. (This is a re-check, not a byte-range lock: the
+    // check-to-seal window is the single statement below, and the sealed
+    // claims are exactly the values verified here.)
+    for (witness, (_, staged_sha)) in auth.source_packs.iter().zip(&resolved_source_hashes) {
+        let path = sources
+            .iter()
+            .find(|s| s.id == witness.id)
+            .and_then(|s| s.path.as_ref());
+        let drift: Option<geobase_gpkg::ceremony::ExportRefused> = match path {
+            // Unreachable in practice: a path-less source is T3 and the
+            // floor refused it long before the publication point.
+            None => Some(geobase_gpkg::ceremony::ExportRefused::TierNeverExports {
+                tier: geobase_tsdf::Tier::T3,
+            }),
+            Some(path) => {
+                let current_tier = crate::vault::current_effective_tier(path);
+                if current_tier == geobase_tsdf::Tier::T3 {
+                    Some(geobase_gpkg::ceremony::ExportRefused::TierNeverExports {
+                        tier: current_tier,
+                    })
+                } else if current_tier != witness.tier || &sha256_hex(path)? != staged_sha {
+                    Some(geobase_gpkg::ceremony::ExportRefused::Declined {
+                        reason: format!(
+                            "source pack '{}' changed between authorization and the \
+                             publication point (tier {} → {}, or content replaced) — \
+                             the publication is aborted rather than sealing a ledger \
+                             row about an artifact the ceremony never authorized",
+                            witness.id,
+                            witness.tier.code(),
+                            current_tier.code(),
+                        ),
+                        observed_at: Some(geobase_gpkg::consent::UtcInstant::now().map_err(
+                            |e| {
+                                ExportError::Infrastructure(format!(
+                                    "node clock implausible — cannot stamp the \
+                                     publication-point refusal: {e}"
+                                ))
+                            },
+                        )?),
+                    })
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(refused) = drift {
+            drop(publication_guard);
+            return Err(record_gate_failure(
+                cipher,
+                exports_dir,
+                tsdf_version,
+                tsdf_origin,
+                request,
+                auth,
+                CeremonyError::Refused(refused),
+            ));
+        }
+    }
     let area_m2_total: f64 = areas.iter().sum();
     let tx = ledger
         .conn()
@@ -1914,6 +2026,161 @@ mod tests {
         assert!(!exports.join("blocked").exists());
     }
 
+    /// Review B3-r3 F3: the required INTERLEAVING negative control. A
+    /// source pack reclassified to T3 AFTER authorization succeeded and
+    /// AFTER the bundle was staged/hashed — at exactly the publication
+    /// point, under the held consent-store lock — must abort the
+    /// publication: no sealed ceremony row, no bundle, one truthful
+    /// refusal row. This drives the SOVEREIGN gate end to end; the
+    /// sequential `stale_tier_reclassified_pack_is_refused` above cannot
+    /// prove check/use coherence.
+    #[test]
+    fn mid_export_reclassification_aborts_at_the_publication_point() {
+        use geobase_gpkg::consent::{
+            Conditions, ConsentBasis, ExportIdentity as Id, Sha256Digest, UtcInstant,
+        };
+        use geobase_gpkg::consent_gate::RecordedConsentGate;
+        use geobase_gpkg::consent_store::{AgreementKind, AgreementRecord, ConsentStore};
+
+        let dir = temp_dir("midflight-reclass");
+        let exports = dir.join("exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        let requester = Id::local_operator("test-operator").unwrap();
+        let store = ConsentStore::open_or_create(&exports, "0.9.4", "vendored:test", &dev_cipher())
+            .unwrap();
+        let now = UtcInstant::now().unwrap();
+        store
+            .record_agreement(
+                &AgreementRecord {
+                    agreement_id: "covering".into(),
+                    kind: AgreementKind::TribalSigned,
+                    source_scope: vec!["capacity".into()],
+                    product_class: PRODUCT_CLASS.into(),
+                    evidence: ConsentBasis::signed_agreement(
+                        "agreements/x.pdf",
+                        Sha256Digest::from_hex(&"ab".repeat(32)).unwrap(),
+                        now,
+                        now,
+                    )
+                    .unwrap(),
+                    authority_of_record: "Example Signatory".into(),
+                    requester_binding: requester.clone(),
+                    conditions: Conditions {
+                        expires_at: None,
+                        purpose_limit: None,
+                        geography_limit: None,
+                    },
+                    recorded_by: requester.clone(),
+                },
+                &[],
+                false,
+            )
+            .unwrap();
+        drop(store);
+
+        let gate = RecordedConsentGate::new(
+            exports.clone(),
+            "0.9.4",
+            "vendored:test",
+            std::sync::Arc::new(dev_cipher()),
+        );
+        let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
+        let src_path = source.path.clone().unwrap();
+        export_test_hooks::arm(
+            "midflight",
+            Box::new(move || {
+                // Reclassify to T3 at exactly the publication point —
+                // authorization already passed on T1, the bundle is staged
+                // and hashed, the consent lock is held.
+                let gpkg = GeoPackage::open(&src_path).unwrap();
+                gpkg.write_tsdf_tag(&geobase_gpkg::TsdfTag {
+                    table: None,
+                    tier: Tier::T3,
+                    tsdf_version: "0.9.4".into(),
+                    tsdf_source_origin: "vendored:test".into(),
+                    classified_by: "midflight-reclassification".into(),
+                    extras: serde_json::Map::new(),
+                })
+                .unwrap();
+            }),
+        );
+        let err = export_product(
+            &gate,
+            &dev_cipher(),
+            &exports,
+            &request("midflight", vec![square((0.0, 0.0), 0.001)]),
+            std::slice::from_ref(&source),
+            &requester,
+        )
+        .unwrap_err();
+        export_test_hooks::disarm("midflight");
+
+        assert!(matches!(err, ExportError::Refused(_)), "{err}");
+        assert!(err.to_string().contains("never leaves the node"), "{err}");
+        // Nothing published, nothing sealed: one refusal row, zero
+        // ceremony/t2 rows, no bundle.
+        assert!(!exports.join("midflight").exists());
+        let trail = trail(&exports);
+        assert_eq!(
+            trail
+                .iter()
+                .filter(|r| r.action == "export.refused")
+                .count(),
+            1,
+            "exactly one refusal row"
+        );
+        assert_eq!(
+            trail
+                .iter()
+                .filter(|r| r.action == "export.ceremony" || r.action == "export.t2")
+                .count(),
+            0,
+            "an aborted publication seals nothing"
+        );
+    }
+
+    /// Review B3-r3 F3, content half: a source pack REPLACED at the
+    /// publication point — equal tier, different bytes — must also abort:
+    /// the sealed row's tier claim and resolved_source_hash would
+    /// otherwise describe two different artifacts.
+    #[test]
+    fn mid_export_content_replacement_aborts_at_the_publication_point() {
+        let dir = temp_dir("midflight-content");
+        let exports = dir.join("exports");
+        let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
+        let src_path = source.path.clone().unwrap();
+        export_test_hooks::arm(
+            "midswap",
+            Box::new(move || {
+                // Same tier, new bytes: append a feature row the ceremony
+                // never saw. The tier re-check alone cannot catch this — the
+                // content identity must.
+                let gpkg = GeoPackage::open(&src_path).unwrap();
+                gpkg.conn()
+                    .execute_batch("INSERT INTO src (geom) SELECT geom FROM src LIMIT 1")
+                    .unwrap();
+            }),
+        );
+        let err = export_product(
+            &ProvisionalDevGate,
+            &dev_cipher(),
+            &exports,
+            &request("midswap", vec![square((0.0, 0.0), 0.001)]),
+            std::slice::from_ref(&source),
+            &operator(),
+        )
+        .unwrap_err();
+        export_test_hooks::disarm("midswap");
+
+        assert!(matches!(err, ExportError::Refused(_)), "{err}");
+        assert!(
+            err.to_string()
+                .contains("changed between authorization and the publication point"),
+            "{err}"
+        );
+        assert!(!exports.join("midswap").exists());
+    }
+
     /// Review B3 F1: a witnessed pack whose artifact no longer resolves
     /// (path missing) is T3 and refused — never silently downgraded.
     #[test]
@@ -1938,32 +2205,119 @@ mod tests {
         assert!(err.to_string().contains("never leaves the node"));
     }
 
-    /// Review B3 F9: on the authorized path `observed_at` on the sealed
-    /// ceremony row equals the instant the record carries (the one the
-    /// authorization used) — the trail proves WHICH time decided.
+    /// Review B3 F9 / B3-r3 F5: the SOVEREIGN authorized-row bar, end to
+    /// end through `RecordedConsentGate` (never `ProvisionalDevGate` —
+    /// only the sovereign matcher proves sovereign semantics). The sealed
+    /// ceremony row must carry: `observed_at` equal to the instant the
+    /// sovereign match used; the matched agreement's id and product
+    /// class; the agreement's conditions verbatim; and the
+    /// publication-point `consent_store_sequence` (§10 linearization)
+    /// alongside the authorization-time one.
     #[test]
-    fn observed_at_on_ceremony_row_equals_the_record_instant() {
-        let dir = temp_dir("observed");
+    fn sovereign_ceremony_row_carries_observed_at_conditions_agreement_and_sequence() {
+        use geobase_gpkg::consent::{
+            Conditions, ConsentBasis, ExportIdentity as Id, Sha256Digest, UtcInstant,
+        };
+        use geobase_gpkg::consent_gate::RecordedConsentGate;
+        use geobase_gpkg::consent_store::{AgreementKind, AgreementRecord, ConsentStore};
+
+        let dir = temp_dir("sovereign-row");
         let exports = dir.join("exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        let requester = Id::local_operator("test-operator").unwrap();
+        let store = ConsentStore::open_or_create(&exports, "0.9.4", "vendored:test", &dev_cipher())
+            .unwrap();
+        let now = UtcInstant::now().unwrap();
+        let expires = UtcInstant::parse_rfc3339("2027-01-01T00:00:00Z").unwrap();
+        store
+            .record_agreement(
+                &AgreementRecord {
+                    agreement_id: "covering".into(),
+                    kind: AgreementKind::TribalSigned,
+                    source_scope: vec!["capacity".into()],
+                    product_class: PRODUCT_CLASS.into(),
+                    evidence: ConsentBasis::signed_agreement(
+                        "agreements/x.pdf",
+                        Sha256Digest::from_hex(&"ab".repeat(32)).unwrap(),
+                        now,
+                        now,
+                    )
+                    .unwrap(),
+                    authority_of_record: "Example Signatory".into(),
+                    requester_binding: requester.clone(),
+                    conditions: Conditions {
+                        expires_at: Some(expires),
+                        purpose_limit: Some("community capacity planning".into()),
+                        geography_limit: Some("reservation boundary".into()),
+                    },
+                    recorded_by: requester.clone(),
+                },
+                &[],
+                false,
+            )
+            .unwrap();
+        drop(store);
+
+        let gate = RecordedConsentGate::new(
+            exports.clone(),
+            "0.9.4",
+            "vendored:test",
+            std::sync::Arc::new(dev_cipher()),
+        );
         let source = source_pack(&dir, "capacity", Tier::T1, &source_ring());
         let outcome = export_product(
-            &ProvisionalDevGate,
+            &gate,
             &dev_cipher(),
             &exports,
-            &request("obs", vec![square((0.0, 0.0), 0.001)]),
+            &request("sov-row", vec![square((0.0, 0.0), 0.001)]),
             std::slice::from_ref(&source),
-            &operator(),
+            &requester,
         )
         .unwrap();
+
         let trail = trail(&exports);
         let ceremony = trail
             .iter()
             .find(|r| r.action == "export.ceremony")
             .unwrap();
+        // The sovereign process decided — not a dev stand-in.
+        assert_eq!(
+            ceremony.details["process"],
+            "geobase-recorded-consent-check-v1"
+        );
+        // EXACT observed_at equality: the row proves WHICH instant the
+        // sovereign expiry/matching comparison used.
         assert_eq!(
             ceremony.details["observed_at"].as_str().unwrap(),
             outcome.ceremony.observed_at.to_rfc3339(),
-            "the row's observed_at must equal the instant the record used"
+            "the row's observed_at must equal the instant the sovereign match used"
+        );
+        // The matched agreement, by id and class.
+        assert_eq!(ceremony.details["agreement_id"], "covering");
+        assert_eq!(ceremony.details["product_class"], PRODUCT_CLASS);
+        // The agreement's conditions, carried verbatim onto the sealed row.
+        assert_eq!(
+            ceremony.details["conditions"]["expires_at"]
+                .as_str()
+                .unwrap(),
+            expires.to_rfc3339()
+        );
+        assert_eq!(
+            ceremony.details["conditions"]["purpose_limit"],
+            "community capacity planning"
+        );
+        assert_eq!(
+            ceremony.details["conditions"]["geography_limit"],
+            "reservation boundary"
+        );
+        // §10 linearization: the sealed row records the consent-store
+        // sequence observed AT THE PUBLICATION POINT, alongside the
+        // authorization-time one; with no consent write in between they
+        // are the same single recorded event.
+        assert_eq!(ceremony.details["consent_store_sequence"], 1);
+        assert_eq!(
+            ceremony.details["consent_store_sequence_at_authorization"],
+            1
         );
     }
 

@@ -61,6 +61,47 @@ use tower_http::services::ServeDir;
 use crate::session::{SessionRegistry, SESSION_HEADER};
 use crate::Node;
 
+/// Test-only interleaving seam (review B3-r3 F1): the serve routes fire
+/// this hook after resolving the tier and before reading data, so a test
+/// can commit an in-place reclassification at exactly the check/use
+/// boundary and prove the pinned read snapshot excludes it. Hooks are
+/// keyed by pack id — concurrently running tests never collide.
+#[cfg(test)]
+pub(crate) mod serve_test_hooks {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    type Hook = Box<dyn Fn() + Send + Sync>;
+    static AFTER_TIER: Mutex<Option<HashMap<String, Hook>>> = Mutex::new(None);
+
+    pub(crate) fn arm(pack_id: &str, hook: Hook) {
+        AFTER_TIER
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(pack_id.into(), hook);
+    }
+
+    pub(crate) fn disarm(pack_id: &str) {
+        if let Some(map) = AFTER_TIER.lock().unwrap().as_mut() {
+            map.remove(pack_id);
+        }
+    }
+
+    pub(crate) fn after_tier(pack_id: &str) {
+        // Fire OUTSIDE the registry lock: the hook may serve blocking work.
+        let armed = AFTER_TIER
+            .lock()
+            .unwrap()
+            .as_mut()
+            .and_then(|map| map.remove(pack_id));
+        if let Some(hook) = armed {
+            hook();
+            arm(pack_id, hook);
+        }
+    }
+}
+
 /// Header carrying the interim operator export token (Phase A, A1).
 pub const EXPORT_TOKEN_HEADER: &str = "x-geobase-export-token";
 
@@ -588,7 +629,28 @@ async fn api_pack_layers(
             );
         }
     };
+    // ONE SQLite read snapshot for the whole serve (review B3-r3 F1): the
+    // same handle is not enough — each autocommit statement reads its own
+    // snapshot, so an IN-PLACE commit between the tier statement and the
+    // data statement could pair a stale low tier with newly written T3
+    // rows. The transaction pins tier and data to one database state; a
+    // snapshot that cannot start is T3 (fail-closed).
+    let snapshot = match gpkg.conn().unchecked_transaction() {
+        Ok(tx) => tx,
+        Err(_) => {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                json!({
+                    "tier": Tier::T3.code(),
+                    "reason": "requires the Phase 1.2 permissions ceremony",
+                }),
+                Some(Tier::T3),
+            );
+        }
+    };
     let tier = crate::vault::effective_tier_of(&gpkg);
+    #[cfg(test)]
+    serve_test_hooks::after_tier(&entry.id);
     if !matches!(tier, Tier::T0 | Tier::T1) {
         return status_json(
             StatusCode::FORBIDDEN,
@@ -606,7 +668,11 @@ async fn api_pack_layers(
         return refused;
     }
 
-    match layer_metadata(&gpkg, &entry.id, tier, &entry.tables) {
+    let served = layer_metadata(&gpkg, &entry.id, tier, &entry.tables);
+    // The serve is complete — release the read snapshot (read-only, so
+    // the rollback on drop writes nothing).
+    drop(snapshot);
+    match served {
         Ok(layers) => status_json(
             StatusCode::OK,
             json!({
@@ -648,11 +714,57 @@ struct ExportBodyFeature {
     score: f64,
 }
 
+/// Map a PRE-AUTHENTICATION refusal-row attempt onto the honest HTTP
+/// response (design §5.3, review B3 F6): row recorded → 403 with the
+/// refusal reason; no cipher for the T3 ledger → 503 (fail-closed, and
+/// the response says the refusal could NOT be audited rather than
+/// claiming the 403+audit contract was met); every other pre-gate
+/// ledger/clock/I/O failure → 503 (the node is not provisioned to audit
+/// the refusal — never an internal error dressed as one).
+fn preauth_refusal_response(
+    recorded: Result<(), crate::export::ExportError>,
+    refusal_reason: &str,
+    refusal_context: &str,
+) -> Response {
+    use crate::export::ExportError;
+    match recorded {
+        Ok(()) => status_json(
+            StatusCode::FORBIDDEN,
+            json!({"reason": refusal_reason}),
+            None,
+        ),
+        Err(ExportError::Encryption(_)) => status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"reason": format!(
+                "export refused ({refusal_context}) AND the node cannot record the \
+                 refusal: T3 ledger has no configured at-rest cipher (fail-closed)"
+            )}),
+            None,
+        ),
+        Err(
+            err @ (ExportError::Infrastructure(_)
+            | ExportError::Ledger(_)
+            | ExportError::Io(_)
+            | ExportError::Write(_)),
+        ) => status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"reason": format!("export refusal could not be audited: {err}")}),
+            None,
+        ),
+        Err(err) => status_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"reason": format!("export refusal could not be audited: {err}")}),
+            None,
+        ),
+    }
+}
+
 /// The first mutating endpoint. Contract in `export.rs` module docs:
 /// loopback-guarded like everything else, 503 without an exports dir,
 /// 404 unknown source pack, 403 on ceremony refusal (the seam enforces
 /// the T3 floor), 400 invalid, 409 exists; success is T2-stamped and
-/// fully audited before the response returns.
+/// fully audited before the response returns. Route order is the
+/// ratified design §5.1: session → floor → authenticate → ceremony.
 async fn api_export(
     State(state): State<ServerState>,
     headers: HeaderMap,
@@ -688,59 +800,13 @@ async fn api_export(
             None,
         );
     };
-    // Authenticate BEFORE parsing the body (A1 + review H1): a missing/wrong
-    // token is refused before any request-controlled content is read, so an
-    // unauthenticated caller cannot reach body parsing and cannot write
-    // attacker-controlled identity into the audit trail. The refusal row is
-    // therefore deliberately GENERIC — it records that an unauthenticated
-    // attempt happened, never a claimed product/requester it cannot trust.
-    let provided = headers
-        .get(EXPORT_TOKEN_HEADER)
-        .and_then(|value| value.to_str().ok());
-    if !provided.is_some_and(|candidate| token_matches(&expected_token, candidate)) {
-        return match crate::export::record_unauthenticated_refusal(
-            state.at_rest.as_ref(),
-            &exports_dir,
-        ) {
-            // Refusal recorded (or the tier did not require a cipher): 403.
-            Ok(()) => status_json(
-                StatusCode::FORBIDDEN,
-                json!({"reason": "export refused: missing or invalid export token \
-                                  (interim operator guard — Phase A, replaced by \
-                                  requester authentication in Phase B)"}),
-                None,
-            ),
-            // Fail-closed: the node cannot even record the refusal safely
-            // (no cipher for the T3 ledger). Say so honestly — do not claim
-            // the 403+audit contract was met when it was not.
-            Err(ExportError::Encryption(_)) => status_json(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"reason": "export refused (invalid token) AND the node cannot \
-                                  record the refusal: T3 ledger has no configured \
-                                  at-rest cipher (fail-closed)"}),
-                None,
-            ),
-            // Every other pre-gate ledger/clock/I/O failure is
-            // INFRASTRUCTURE too (design §5.3, review B3 F6) — the node is
-            // not provisioned to audit the refusal, which is a 503, never
-            // an internal error dressed as one.
-            Err(
-                err @ (ExportError::Infrastructure(_)
-                | ExportError::Ledger(_)
-                | ExportError::Io(_)
-                | ExportError::Write(_)),
-            ) => status_json(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"reason": format!("export refusal could not be audited: {err}")}),
-                None,
-            ),
-            Err(err) => status_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({"reason": format!("export refusal could not be audited: {err}")}),
-                None,
-            ),
-        };
-    }
+    // Ratified order (design §5.1, review B3-r3 F4): resolve the session
+    // and derive the node-authoritative tiers FIRST, apply the T3 floor
+    // SECOND, authenticate THIRD. The body is therefore parsed before the
+    // token check — the parse is structural (serde) — and every refusal
+    // row written before authentication stays GENERIC: no request-claimed
+    // product or identity is ever attributed pre-authentication (review
+    // H1's audit posture, preserved under the ratified floor-first order).
     let parsed: ExportBody = match serde_json::from_slice(&body) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -754,12 +820,13 @@ async fn api_export(
 
     let requester = interim_operator_identity();
 
-    // B3 (design §4): the source set is the NODE'S session record — every
-    // pack served into the named session, period. The session is
-    // CONSUMED here (owner-checked, single-use — review B3 F2): the source
-    // set is snapshotted and the session closed so it cannot be replayed or
-    // extended. No valid open session bound to this operator → refuse with
-    // a refusal row. The request cannot add or subtract.
+    // §5.1 STEP 1 — resolve the session (design §4): the source set is the
+    // NODE'S session record — every pack served into the named session,
+    // period. The session is CONSUMED here (owner-checked, single-use —
+    // review B3 F2): the source set is snapshotted and the session closed
+    // so it cannot be replayed or extended. No valid open session bound to
+    // this operator → refuse with a GENERIC refusal row (pre-auth). The
+    // request cannot add or subtract.
     let witnessed_ids = match state
         .sessions
         .consume(&parsed.session, &requester.audit_string())
@@ -770,45 +837,21 @@ async fn api_export(
                 "export refused: {err} (the source set is the node's own session \
                  record — an export without a witnessed session has no provenance)"
             );
-            return match crate::export::record_declined_refusal(
-                state.at_rest.as_ref(),
-                &exports_dir,
-                &parsed.product,
-                &requester,
+            return preauth_refusal_response(
+                crate::export::record_preauth_refusal(
+                    state.at_rest.as_ref(),
+                    &exports_dir,
+                    &reason,
+                ),
                 &reason,
-            ) {
-                Ok(()) => status_json(StatusCode::FORBIDDEN, json!({"reason": reason}), None),
-                Err(ExportError::Encryption(_)) => status_json(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    json!({"reason": "export refused (invalid session) AND the node cannot \
-                                      record the refusal: T3 ledger has no configured \
-                                      at-rest cipher (fail-closed)"}),
-                    None,
-                ),
-                // Pre-gate ledger/clock/I/O failures are INFRASTRUCTURE
-                // (design §5.3, review B3 F6): 503, same class as the
-                // cipher special case above.
-                Err(
-                    err @ (ExportError::Infrastructure(_)
-                    | ExportError::Ledger(_)
-                    | ExportError::Io(_)
-                    | ExportError::Write(_)),
-                ) => status_json(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    json!({"reason": format!("export refusal could not be audited: {err}")}),
-                    None,
-                ),
-                Err(err) => status_json(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({"reason": format!("export refusal could not be audited: {err}")}),
-                    None,
-                ),
-            };
+                "invalid session",
+            );
         }
     };
-    // Re-resolve effective tiers against the catalog AT EXPORT TIME
-    // (design §5.1 step 1): a witnessed pack that no longer resolves is
-    // T3 — the floor refuses it downstream.
+    // …and derive the authoritative tiers: every witnessed pack re-resolved
+    // against the catalog, its CURRENT effective tier read from the
+    // artifact on disk — never the boot-cached hint, never anything the
+    // request claimed. A pack that no longer resolves is T3.
     let sources: Vec<SourcePack> = witnessed_ids
         .iter()
         .map(
@@ -826,6 +869,50 @@ async fn api_export(
             },
         )
         .collect();
+    let effective_source_tier = sources
+        .iter()
+        .map(|source| match &source.path {
+            Some(path) => crate::vault::current_effective_tier(path),
+            None => Tier::T3,
+        })
+        .max()
+        // An empty witnessed set has no provenance — sovereign by default.
+        .unwrap_or(Tier::T3);
+
+    // §5.1 STEP 2 — the T3 floor, on the session-derived node-resolved
+    // tier, BEFORE authentication and with ZERO consent-store access: the
+    // floor is an invariant, not a policy question, so no credential and
+    // no agreement can even be consulted about T3 egress. (The ceremony
+    // gate re-derives and re-enforces this same floor downstream —
+    // defense in depth, not a substitute for the boundary order.)
+    if effective_source_tier == Tier::T3 {
+        let reason = "export refused: tier T3 data never leaves the node — no ceremony \
+                      process can authorize T3 egress (invariant, not policy; floor \
+                      applied before authentication per design §5.1, without touching \
+                      the consent store)"
+            .to_string();
+        return preauth_refusal_response(
+            crate::export::record_preauth_refusal(state.at_rest.as_ref(), &exports_dir, &reason),
+            &reason,
+            "T3 floor",
+        );
+    }
+
+    // §5.1 STEP 3 — authenticate (A1 + review H1): a missing/wrong token
+    // is refused with a GENERIC row — never a claimed product/requester
+    // the node cannot trust.
+    let provided = headers
+        .get(EXPORT_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if !provided.is_some_and(|candidate| token_matches(&expected_token, candidate)) {
+        let reason = "export refused: missing or invalid export token (interim operator \
+                      guard — Phase A, replaced by requester authentication in Phase B)";
+        return preauth_refusal_response(
+            crate::export::record_unauthenticated_refusal(state.at_rest.as_ref(), &exports_dir),
+            reason,
+            "invalid token",
+        );
+    }
 
     let mut features = Vec::with_capacity(parsed.features.len());
     for (index, feature) in parsed.features.iter().enumerate() {
@@ -1028,7 +1115,26 @@ async fn api_pack_table_features(
             );
         }
     };
+    // ONE SQLite read snapshot for the whole serve (review B3-r3 F1) —
+    // same rationale as the layers route: pin the tier statement and the
+    // feature statement to one database state so an in-place commit
+    // cannot pair a stale low tier with new T3 rows. Fail-closed.
+    let snapshot = match gpkg.conn().unchecked_transaction() {
+        Ok(tx) => tx,
+        Err(_) => {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                json!({
+                    "tier": Tier::T3.code(),
+                    "reason": "requires the Phase 1.2 permissions ceremony",
+                }),
+                Some(Tier::T3),
+            );
+        }
+    };
     let tier = crate::vault::effective_tier_of(&gpkg);
+    #[cfg(test)]
+    serve_test_hooks::after_tier(&entry.id);
     let Some(table_info) = entry.tables.iter().find(|info| info.name == table) else {
         return status_json(
             StatusCode::NOT_FOUND,
@@ -1067,7 +1173,10 @@ async fn api_pack_table_features(
         return refused;
     }
 
-    match feature_collection(&gpkg, &table) {
+    let served = feature_collection(&gpkg, &table);
+    // Serve complete — release the read snapshot (read-only rollback).
+    drop(snapshot);
+    match served {
         Ok(collection) => status_json(StatusCode::OK, collection, Some(tier)),
         Err(err) => status_json(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2146,6 +2255,172 @@ mod tests {
         assert!(!body.contains("ORIGINAL_T0"), "{body}");
     }
 
+    /// Review B3-r3 F1: serve check/use coherence against an IN-PLACE
+    /// commit — the interleaving the between-request swap test above
+    /// cannot exercise. A second connection commits a T3 reclassification
+    /// plus a sentinel row at exactly the boundary between the tier
+    /// statement and the data statement (via the test hook). The pinned
+    /// read snapshot must make one of two honest outcomes true — the
+    /// mid-serve write is excluded from this response, or refused until
+    /// the serve ends — and the sentinel must NEVER appear under the
+    /// stale low tier. Once the write lands, the very next request is
+    /// refused outright.
+    #[tokio::test]
+    async fn serve_snapshot_excludes_a_mid_request_reclassification() {
+        let path = temp_path("midserve-reclass.gpkg");
+        let gpkg = GeoPackage::create(&path).unwrap();
+        create_feature_table(
+            &gpkg,
+            &FeatureTableSpec {
+                table: "sites".into(),
+                identifier: "Sites".into(),
+                srs_epsg: 4326,
+                srs_definition: None,
+                geometry_type: "POINT".into(),
+                columns: vec![geobase_gpkg::vector::ColumnDef {
+                    name: "label".into(),
+                    sql_type: "TEXT",
+                }],
+                bounds: (-123.5, 48.7, -123.4, 48.8),
+            },
+        )
+        .unwrap();
+        gpkg.conn()
+            .execute(
+                "INSERT INTO sites (geom, label) VALUES (?1, ?2)",
+                (&gpkg_point_blob(-123.45, 48.75), "ORIGINAL_T0"),
+            )
+            .unwrap();
+        gpkg.write_tsdf_tag(&TsdfTag {
+            table: None,
+            tier: Tier::T0,
+            tsdf_version: "0.9.4".into(),
+            tsdf_source_origin: "vendored:embedded".into(),
+            classified_by: "test".into(),
+            extras: Map::new(),
+        })
+        .unwrap();
+        drop(gpkg);
+
+        let entry = CatalogEntry {
+            id: path.file_stem().unwrap().to_string_lossy().into_owned(),
+            path: path.clone(),
+            tier: Tier::T0,
+            tagged: true,
+            tsdf_version: Some("0.9.4".into()),
+            tables: vec![TableInfo {
+                name: "sites".into(),
+                data_type: "features".into(),
+            }],
+        };
+        let id = entry.id.clone();
+        let app = router(test_node(vec![entry]), &ServerConfig::default());
+
+        // The mid-serve writer: fired between the tier statement and the
+        // data statement, on a SECOND connection. Reclassify to T3 and
+        // insert a sentinel row in one transaction; record whether the
+        // commit was admitted or refused while the serve snapshot was
+        // live.
+        fn t3_reclassify(path: &std::path::Path) -> Result<(), geobase_gpkg::rusqlite::Error> {
+            let conn = geobase_gpkg::rusqlite::Connection::open(path)?;
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
+                "INSERT INTO sites (geom, label) VALUES (?1, ?2)",
+                (&gpkg_point_blob(-123.44, 48.76), "MIDSERVE_T3_SENTINEL"),
+            )?;
+            // The raw shape of a whole-artifact T3 TSDF tag (the typed
+            // writer would also work, but one raw transaction keeps the
+            // reclassification + sentinel atomic).
+            tx.execute(
+                "INSERT INTO gpkg_metadata (md_scope, md_standard_uri, mime_type, metadata) \
+                 VALUES ('dataset', ?1, 'application/json', ?2)",
+                geobase_gpkg::rusqlite::params![
+                    geobase_gpkg::TSDF_METADATA_URI,
+                    serde_json::json!({
+                        "tier": "T3",
+                        "tsdf_version": "0.9.4",
+                        "tsdf_source_origin": "vendored:embedded",
+                        "classified_by": "midserve-test",
+                    })
+                    .to_string()
+                ],
+            )?;
+            let md_id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO gpkg_metadata_reference (reference_scope, table_name, md_file_id) \
+                 VALUES ('geopackage', NULL, ?1)",
+                [md_id],
+            )?;
+            tx.commit()
+        }
+        let write_outcome: std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        {
+            let outcome = write_outcome.clone();
+            let hook_path = path.clone();
+            serve_test_hooks::arm(
+                &id,
+                Box::new(move || {
+                    *outcome.lock().unwrap() =
+                        Some(t3_reclassify(&hook_path).map_err(|e| e.to_string()));
+                }),
+            );
+        }
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/tables/sites/features"))
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        serve_test_hooks::disarm(&id);
+        let status = response.status();
+        let body =
+            String::from_utf8_lossy(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .into_owned();
+
+        // The hook fired and attempted the commit.
+        let outcome = write_outcome
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the after-tier hook must fire during the serve");
+        // THE invariant: whatever the writer's fate, the response never
+        // pairs its low tier with the mid-serve T3 rows.
+        assert!(
+            !body.contains("MIDSERVE_T3_SENTINEL"),
+            "a stale low tier served mid-commit T3 data: {body}"
+        );
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("ORIGINAL_T0"), "{body}");
+
+        // The serve is over — the reclassification lands now (retry if
+        // the live snapshot refused it), and the NEXT request must refuse.
+        if outcome.is_err() {
+            t3_reclassify(&path).expect("reclassification must land once the serve ends");
+        }
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/packs/{id}/tables/sites/features"))
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body =
+            String::from_utf8_lossy(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .into_owned();
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(!body.contains("MIDSERVE_T3_SENTINEL"), "{body}");
+        assert!(!body.contains("ORIGINAL_T0"), "{body}");
+    }
+
     /// [EGRESS-GATE A5] The T3 export ledger AND the T3 consent store are
     /// never catalogued — enforced by name, not merely by living in a
     /// separate directory. Even placed INSIDE the vault (a
@@ -2784,17 +3059,68 @@ mod tests {
         );
     }
 
-    /// [A1] A missing token is refused 403 BEFORE the ceremony seam, with a
-    /// GENERIC `export.refused` audit row (no attacker-controlled identity),
-    /// and no product artifact of any kind on disk.
+    /// Open a session (token-guarded) and serve `pack_id` into it, so an
+    /// export request can pass §5.1 steps 1–2 and reach the step-3 token
+    /// guard. Returns the open session id.
+    async fn witnessed_session(app: &axum::Router, token: &str, pack_id: &str) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/sessions")
+                    .header(header::HOST, "127.0.0.1")
+                    .header(EXPORT_TOKEN_HEADER, token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let session = json_response(response).await["session"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/packs/{pack_id}/layers"))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(crate::session::SESSION_HEADER, session.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        session
+    }
+
+    /// New-shape export body against a witnessed session (design §4).
+    fn session_export_body(session: &str) -> Value {
+        json!({
+            "product": "guard-check",
+            "session": session,
+            "features": [{
+                "geometry": {"type":"Polygon","coordinates":[[[0.0,0.0],[0.001,0.0],[0.001,0.001],[0.0,0.001],[0.0,0.0]]]},
+                "score": 0.5
+            }]
+        })
+    }
+
+    /// [A1, ratified §5.1 order] A missing token is refused 403 at STEP 3 —
+    /// after the session resolved and the floor passed, BEFORE the ceremony
+    /// seam — with a GENERIC `export.refused` audit row (no
+    /// attacker-controlled identity), and no product artifact on disk.
     #[tokio::test]
     async fn export_without_token_refused_with_generic_audit_row() {
         let (app, exports, id) = export_guard_fixture("a1-missing", Some("secret-token"));
+        // §5.1 steps 1–2 must pass for the token guard to be the refusing
+        // step: a witnessed session over a T1 pack.
+        let session = witnessed_session(&app, "secret-token", &id).await;
         let response = app
             .oneshot(
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(export_body_for(&id).to_string()))
+                    .body(Body::from(session_export_body(&session).to_string()))
                     .unwrap(),
             )
             .await
@@ -2832,21 +3158,136 @@ mod tests {
         }
     }
 
-    /// [A1] A wrong token is refused identically to a missing one.
+    /// [A1, ratified §5.1 order] A wrong token is refused identically to a
+    /// missing one — at step 3, behind a witnessed session.
     #[tokio::test]
     async fn export_with_wrong_token_refused() {
         let (app, _exports, id) = export_guard_fixture("a1-wrong", Some("secret-token"));
+        let session = witnessed_session(&app, "secret-token", &id).await;
         let response = app
             .oneshot(
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
                     .header(EXPORT_TOKEN_HEADER, "wrong-token!")
-                    .body(Body::from(export_body_for(&id).to_string()))
+                    .body(Body::from(session_export_body(&session).to_string()))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// [Ratified §5.1 order] An export with NO valid session — whatever its
+    /// token — refuses at STEP 1 with a GENERIC pre-authentication row: an
+    /// unauthenticated caller can never learn anything past the session
+    /// boundary, and nothing request-claimed is attributed.
+    #[tokio::test]
+    async fn export_without_session_refused_with_generic_preauth_row() {
+        let (app, exports, _id) = export_guard_fixture("a1-nosession", Some("secret-token"));
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        session_export_body("no-such-session").to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = json_response(response).await;
+        assert!(
+            body["reason"].as_str().unwrap().contains("session"),
+            "refusal names the session boundary: {body}"
+        );
+        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
+        let trail = ledger.audit_trail().unwrap();
+        assert_eq!(trail.len(), 1, "exactly the refusal row");
+        assert_eq!(trail[0].action, "export.refused");
+        assert_eq!(
+            trail[0].dataset_id, "(pre-authentication export attempt)",
+            "no request-claimed product is attributed before authentication"
+        );
+        assert_ne!(trail[0].actor, "guard-test");
+    }
+
+    /// ★ [Ratified §5.1 steps 1–2, review B3-r3 F4 / §11 floor-first bar]
+    /// The exact HTTP negative control: a witnessed LOW pack is
+    /// reclassified to T3 in place AFTER the serve; the export — sent
+    /// WITHOUT any token — must refuse on the SESSION-DERIVED node-resolved
+    /// floor, before authentication, with ZERO consent-store access
+    /// (`node-consent.gpkg` is created lazily on first gate use, so its
+    /// absence proves no store read) and no product bytes of any kind.
+    #[tokio::test]
+    async fn floor_refuses_session_derived_t3_before_authentication_with_zero_store_access() {
+        let entry = create_pack("floor-first-src.gpkg", Some(Tier::T1));
+        let id = entry.id.clone();
+        let pack_path = entry.path.clone();
+        let exports = temp_path("floor-first-exports");
+        let app = router(
+            test_node(vec![entry]),
+            &ServerConfig {
+                exports_dir: Some(exports.clone()),
+                at_rest: Some(Arc::new(geobase_gpkg::cipher::DevPlaintextCipher::new())),
+                export_token: Some("secret-token".into()),
+                ..ServerConfig::default()
+            },
+        );
+        let session = witnessed_session(&app, "secret-token", &id).await;
+        // Reclassify the witnessed artifact to T3 — after the serve,
+        // before the export. The floor input must be the CURRENT
+        // node-resolved tier of the session's packs, not the boot hint
+        // and not anything the request claims.
+        {
+            let gpkg = GeoPackage::open(&pack_path).unwrap();
+            gpkg.write_tsdf_tag(&TsdfTag {
+                table: None,
+                tier: Tier::T3,
+                tsdf_version: "0.9.4".into(),
+                tsdf_source_origin: "vendored:test".into(),
+                classified_by: "post-serve-reclassification".into(),
+                extras: Map::new(),
+            })
+            .unwrap();
+        }
+        let response = app
+            .oneshot(
+                Request::post("/api/export")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    // Deliberately NO export token: the floor must answer
+                    // before authentication is even considered.
+                    .body(Body::from(session_export_body(&session).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = json_response(response).await;
+        let reason = body["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("never leaves the node"),
+            "the refusal is the T3 floor, not the token guard: {body}"
+        );
+        assert!(
+            reason.contains("before authentication"),
+            "the refusal names the ratified order: {body}"
+        );
+        // ZERO consent-store access: the sovereign gate would create the
+        // store on first use — it must never have been consulted.
+        assert!(
+            !exports.join("node-consent.gpkg").exists(),
+            "the T3 floor must run without touching the consent store"
+        );
+        // No product bytes: no bundle, no staging.
+        assert!(!exports.join("guard-check").exists());
+        assert!(!exports.join(".staging").exists());
+        // The refusal row is GENERIC (pre-authentication).
+        let ledger = GeoPackage::open(&exports.join("node-audit.gpkg")).unwrap();
+        let trail = ledger.audit_trail().unwrap();
+        assert_eq!(trail.len(), 1, "exactly the refusal row");
+        assert_eq!(trail[0].action, "export.refused");
+        assert_eq!(trail[0].dataset_id, "(pre-authentication export attempt)");
     }
 
     /// [A1 / review B3] An empty configured token is treated as UNCONFIGURED
@@ -2880,11 +3321,16 @@ mod tests {
         assert!(!exports.join(format!("{id}.shp")).exists());
     }
 
-    /// [A1 / review H1] Malformed JSON WITHOUT a token is refused by the guard
-    /// (403), never reaching the body parser — authentication precedes parsing.
+    /// [Ratified §5.1 order, review B3-r3 F4] Malformed JSON is a 400 from
+    /// the STRUCTURAL parse — which now precedes authentication, because
+    /// the session must resolve before the floor and the floor before the
+    /// token (§5.1 steps 1–3). Review H1's actual invariant is preserved
+    /// differently: nothing request-controlled reaches the audit trail
+    /// before authentication (generic rows only), and a parse failure
+    /// writes NO row at all.
     #[tokio::test]
-    async fn malformed_body_without_token_is_refused_by_the_guard() {
-        let (app, _exports, _id) = export_guard_fixture("a1-malformed", Some("secret-token"));
+    async fn malformed_body_without_token_is_a_parse_400_with_no_audit_row() {
+        let (app, exports, _id) = export_guard_fixture("a1-malformed", Some("secret-token"));
         let response = app
             .oneshot(
                 Request::post("/api/export")
@@ -2894,8 +3340,13 @@ mod tests {
             )
             .await
             .unwrap();
-        // 403 (guard), not 400 (parser): the token is checked first.
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        // 400 (structural parse), and no ledger row was written — there is
+        // no refusal to attribute and nothing trusted to record.
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            !exports.join("node-audit.gpkg").exists(),
+            "a parse failure writes no audit row"
+        );
     }
 
     #[test]
@@ -2924,15 +3375,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    /// [review advisory] A wrong token on a FAIL-CLOSED node (no cipher) is
-    /// refused with an honest 503 (the node cannot record the refusal
-    /// safely), never a false 403 implying the refusal was audited.
+    /// [review advisory, ratified §5.1 order] A refusal on a FAIL-CLOSED
+    /// node (no cipher) answers an honest 503 (the node cannot record the
+    /// refusal safely), never a false 403 implying the refusal was
+    /// audited. Under §5.1 the first refusing step is session resolution.
     #[tokio::test]
-    async fn wrong_token_on_fail_closed_node_returns_503_not_false_403() {
+    async fn refusal_on_fail_closed_node_returns_503_not_false_403() {
         // No `at_rest` cipher configured → FailClosedCipher refuses the T3
         // ledger write, so the refusal cannot be recorded.
         let entry = create_pack("a1-failclosed-src.gpkg", Some(Tier::T1));
-        let id = entry.id.clone();
         let exports = temp_path("a1-failclosed-exports");
         let app = router(
             test_node(vec![entry]),
@@ -2948,7 +3399,9 @@ mod tests {
                 Request::post("/api/export")
                     .header(header::CONTENT_TYPE, "application/json")
                     .header(EXPORT_TOKEN_HEADER, "wrong")
-                    .body(Body::from(export_body_for(&id).to_string()))
+                    .body(Body::from(
+                        session_export_body("no-such-session").to_string(),
+                    ))
                     .unwrap(),
             )
             .await
