@@ -176,7 +176,26 @@ pub enum ServerError {
     Bind { port: u16, source: std::io::Error },
     /// Startup publication recovery failed (design §6 step 6) — the node
     /// must not serve with unresolved in-flight publications.
-    #[error("publication recovery failed: {detail} — refusing to serve with unresolved in-flight publications (fail-closed)")]
+    ///
+    /// This is boot-fatal by design and stays so (review B3 post-merge F3):
+    /// mandatory recovery may be resolving a renamed-but-unfinalized
+    /// publication, so serving anyway would risk unresolved publication
+    /// truth. The message is ACTIONABLE rather than bypassing the invariant:
+    /// a common cause is an export-enabled node whose T3 ledger cannot be
+    /// opened (e.g. a leftover `UNENCRYPTED-DEV` ledger with no cipher
+    /// configured). For pure VIEWING, run the node without exports
+    /// (`exports_dir: None` — the desktop shell: leave `GEOBASE_EXPORTS`
+    /// unset); production must RE-RECORD `UNENCRYPTED-DEV` data, never
+    /// silently migrate it. The encrypted open/unlock/recovery path is B4.
+    #[error(
+        "publication recovery failed: {detail}\n\
+         The node refuses to serve with unresolved in-flight publications \
+         (fail-closed, design §6). This is usually an export-enabled node \
+         whose T3 export ledger cannot be opened. To VIEW packs without \
+         exporting, run without an exports directory (unset GEOBASE_EXPORTS). \
+         An UNENCRYPTED-DEV ledger must be re-recorded, not migrated; \
+         encrypted recovery arrives in B4."
+    )]
     Recovery { detail: String },
 }
 
@@ -3203,6 +3222,54 @@ mod tests {
             StatusCode::BAD_REQUEST,
             "an export-enabled node refuses an unknown session on a source serve"
         );
+    }
+
+    /// Review B3 post-merge F3: mandatory startup publication recovery stays
+    /// BOOT-FATAL on an export-enabled node whose T3 ledger cannot be opened
+    /// — it must NOT catch-and-continue (that would serve with unresolved
+    /// publication truth). The refusal is actionable (names the viewer-only
+    /// escape + the re-record policy), it happens BEFORE any listener binds,
+    /// and it leaves the ledger byte-for-byte unchanged.
+    #[tokio::test]
+    async fn export_enabled_startup_with_unreadable_ledger_refuses_before_bind_and_preserves_ledger()
+    {
+        let exports = temp_path("f3-recovery-exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        // Materialize a leftover UNENCRYPTED-DEV ledger, as a past
+        // GEOBASE_DEV_UNENCRYPTED run would have.
+        crate::export::record_unauthenticated_refusal(
+            &geobase_gpkg::cipher::DevPlaintextCipher::new(),
+            &exports,
+        )
+        .unwrap();
+        let ledger = exports.join("node-audit.gpkg");
+        assert!(ledger.is_file());
+        let before = std::fs::read(&ledger).unwrap();
+
+        // Boot export-enabled with NO cipher (FailClosedCipher default):
+        // recovery cannot open the T3 ledger → boot-fatal Recovery.
+        let node = test_node(vec![create_pack("f3-recovery-src.gpkg", Some(Tier::T1))]);
+        // `ServerHandle` is not `Debug`, so match manually rather than unwrap_err.
+        let err = match serve(
+            node,
+            ServerConfig {
+                port: 0,
+                exports_dir: Some(exports.clone()),
+                // at_rest: None → FailClosedCipher.
+                ..ServerConfig::default()
+            },
+        )
+        .await
+        {
+            Ok(_) => panic!("export-enabled node with an unreadable T3 ledger must refuse to boot"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ServerError::Recovery { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("unset GEOBASE_EXPORTS"), "actionable viewer escape: {msg}");
+        assert!(msg.contains("re-recorded"), "names the re-record policy: {msg}");
+        // Recovery touched nothing — the ledger is byte-for-byte unchanged.
+        assert_eq!(std::fs::read(&ledger).unwrap(), before);
     }
 
     /// Build a router with exports enabled behind the A1 token guard plus a
