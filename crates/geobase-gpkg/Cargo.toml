@@ -16,3 +16,19 @@ serde = { workspace = true }
 serde_json.workspace = true
 thiserror = { workspace = true }
 tiff = "0.11.0"
+# Validated UTC instants for the consent schema (B3). Already in the
+# dependency tree transitively; pinned here as a direct, auditable dep.
+time = { version = "0.3", features = ["parsing", "formatting"] }
+# `test-support` gates the store-less ProvisionalDevGate so it is never
+# compiled into a release build (review B3 F1b). Enabled by downstream
+# dev-dependencies for their tests; OFF for `cargo build --workspace`.
+# OS CSPRNG for unforgeable consent-store event ids (B3). Same pin as
+# geobase-engine-desktop's export-token use.
+getrandom = { version = "0.3", features = ["std"] }
+# Proof-core hash commitment over witnessed-consent evidence detail (B3
+# §9 compaction support). Same pin as geobase-engine-desktop.
+sha2 = "0.10.9"
+
+[features]
+# See the note above `getrandom`: gates ProvisionalDevGate out of release.
+test-support = []

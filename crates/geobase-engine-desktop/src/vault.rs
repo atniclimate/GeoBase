@@ -158,14 +158,45 @@ fn read_tables(gpkg: &GeoPackage, path: &str) -> Result<Vec<TableInfo>, VaultErr
     Ok(tables)
 }
 
+/// Re-resolve a pack's **current** effective tier by reopening the
+/// artifact and reading its TSDF tags right now — NOT the tier cached in
+/// the boot catalog (review B3 F1a). A pack reclassified or replaced while
+/// the node is up must be evaluated at its present classification.
+/// Missing, unreadable, or unclassifiable → **T3** (fail-closed, "when in
+/// doubt, T3"): a node that cannot currently prove a low tier must treat
+/// the pack as sovereign.
+pub fn current_effective_tier(path: &Path) -> Tier {
+    match GeoPackage::open(path) {
+        Ok(gpkg) => effective_tier_of(&gpkg),
+        // Missing/unreadable artifact — sovereign by default.
+        Err(_) => Tier::T3,
+    }
+}
+
+/// The effective tier of an ALREADY-OPEN artifact handle (review B3 F1b):
+/// the serving routes read tier and data from the SAME open `GeoPackage`
+/// so a file swapped between a tier check and a data read can never be
+/// served at the stale tier — one open, one artifact, check and use
+/// coherent by construction. Untagged or unreadable tags → T3.
+pub fn effective_tier_of(gpkg: &GeoPackage) -> Tier {
+    match gpkg.geopackage_tier() {
+        Ok(Some(tier)) => tier,
+        Ok(None) | Err(_) => Tier::T3,
+    }
+}
+
 /// The reserved file name of the T3 export ledger (`export.rs`). Never
 /// catalogued, wherever it is found.
 pub const RESERVED_LEDGER_NAME: &str = "node-audit.gpkg";
 
 fn is_reserved_ledger(path: &Path) -> bool {
+    let reserved = |name: &str| {
+        name.eq_ignore_ascii_case(RESERVED_LEDGER_NAME)
+            || name.eq_ignore_ascii_case(geobase_gpkg::consent_store::RESERVED_CONSENT_STORE_NAME)
+    };
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.eq_ignore_ascii_case(RESERVED_LEDGER_NAME))
+        .is_some_and(reserved)
 }
 
 fn is_gpkg_path(path: &Path) -> bool {

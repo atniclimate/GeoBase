@@ -98,6 +98,10 @@ const ready: Promise<void> = new Promise((resolve, reject) => {
   map.on("load", () => {
     (async (): Promise<void> => {
       await enableTerrain();
+      // B3: begin the node-witnessed export session BEFORE any source
+      // layer is fetched, so every pack the node serves is witnessed
+      // into it — an export without a witnessed session is refused.
+      await client.beginSession();
       await stackRenderableLayers();
     })().then(resolve, reject);
   });
@@ -339,7 +343,6 @@ function styleLayers(layer: CatalogLayer): (FillLayerSpecification | LineLayerSp
 
 function buildPanel(): {
   product: HTMLInputElement;
-  requester: HTMLInputElement;
   score: HTMLInputElement;
   draw: HTMLButtonElement;
   exportButton: HTMLButtonElement;
@@ -349,7 +352,9 @@ function buildPanel(): {
   section.id = "rstep-panel";
 
   const product = input("rstep-product", "text", "product");
-  const requester = input("rstep-requester", "text", "requester");
+  // B3: no requester input — identity is authenticated node-side, never
+  // claimed by the app (free-text identity was replaced, CEREMONY-DESIGN
+  // §2.4).
   const score = input("rstep-score", "number", "1");
   score.value = "1";
 
@@ -367,9 +372,9 @@ function buildPanel(): {
   const status = document.createElement("pre");
   status.id = "rstep-status";
 
-  section.append(product, requester, score, draw, exportButton, status);
+  section.append(product, score, draw, exportButton, status);
   document.body.appendChild(section);
-  return { product, requester, score, draw, exportButton, status };
+  return { product, score, draw, exportButton, status };
 }
 
 function input(id: string, type: string, placeholder: string): HTMLInputElement {
@@ -393,10 +398,10 @@ function updateDrawButton(button: HTMLButtonElement, tool: HandRolledPaintTool):
 
 async function exportProduct(): Promise<void> {
   try {
+    // B3: the source set is the node's witnessed session record — the
+    // app names only the session (via the client), never the packs.
     const outcome = await client.exportProduct({
       product: panel.product.value,
-      source_packs: [...activePackIds],
-      requester: panel.requester.value,
       features: paint.features().map((feature) => ({ geometry: feature.geometry, score: feature.score })),
     });
 
@@ -407,6 +412,7 @@ async function exportProduct(): Promise<void> {
       ...Object.entries(outcome.files).map(([key, file]) => `${key}: ${file.name} ${file.sha256}`),
       `ceremony: ${outcome.ceremony.process}`,
       `basis: ${outcome.ceremony.basis}`,
+      `publication: ${outcome.publication_id}`,
     ].join("\n");
   } catch (err: unknown) {
     if (err instanceof NodeRequestError) {

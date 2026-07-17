@@ -112,10 +112,16 @@ The chain, every step observable:
    (fail-closed misconfiguration). Provisional by design: replaced by
    real requester authentication in Phase B (B5).
 2. **CeremonyGate seam** (`crates/geobase-gpkg/src/ceremony.rs`):
-   every export authorized BEFORE any file is written.
-   `ProvisionalDevGate` (the only impl until Phase 1.2) refuses T3
-   unconditionally and records the provisional basis verbatim.
-   Phase 1.2 handoff: `docs/CEREMONY-GATE.md`.
+   every export authorized BEFORE any file is written. **Since B3
+   (2026-07-16) the composed gate is the sovereign
+   `RecordedConsentGate`** (`consent_gate.rs`): node-witnessed session
+   source set (§4), T3 floor before any store access, recorded-consent
+   matching (`consent_store.rs`, reserved `node-consent.gpkg`),
+   governance-vs-infrastructure refusal split (403/503), typed identity
+   and evidence (`consent.rs` — free-text requester/conditions
+   abolished). `ProvisionalDevGate` survives for tests only.
+   Handoff/contract: `docs/CEREMONY-GATE.md`; design of record:
+   `docs/CEREMONY-DESIGN.md`.
 3. `export_product()` (`crates/geobase-engine-desktop/src/export.rs`):
    builds the product layer (fields exactly `id, area_m2, score`;
    Chamberlain–Duquette spherical areas), writes via the narrow
@@ -127,8 +133,13 @@ The chain, every step observable:
    multisets), and NO output geometry equals any source-pack geometry.
    Failure removes everything.
 5. Ledger: `exports_dir/node-audit.gpkg` (T3-tagged, outside the vault
-   scan) — `export.ceremony` + `export.t2` rows (refusals get
-   `export.refused`). `.tsdf.json` sidecar carries the T2 stamp +
+   scan) — since B3, the recoverable publication protocol
+   (`docs/CEREMONY-DESIGN.md` §6): `export.intent` → one txn sealing
+   `export.ceremony` + `export.t2` (prepared) → atomic bundle-directory
+   rename → `export.published`; startup recovery finalizes or aborts
+   truthfully. Governance refusals get `export.refused` (carrying
+   `observed_at`); infrastructure failures get `export.infrastructure`
+   *attempted* + 503. `.tsdf.json` sidecar carries the T2 stamp +
    provenance (shapefiles have no in-band metadata channel — the
    ledger is the record).
 
@@ -142,22 +153,24 @@ The chain, every step observable:
 | Layer (1.1) | two packages toggle+stack+round-trip (pixel diffs), URL boot state | `engine-light/scripts/verify-layers.mjs` | `render-gate.yml: layer-gate` |
 | RStep (1.3d) | paint → export → product-only shapefile (pyogrio) + ceremony record in ledger | `solo/rstep/scripts/verify-rstep.mjs` (+ `verify_rstep_oracle.py`, `examples/verify-export-audit.rs`) | `render-gate.yml: rstep-gate` |
 
-**RStep row (updated 2026-07-16, Phase A A3–A7): harness built —
-acceptance deferred to the sovereignty-core gate (M5/B8).** The 1.3d
-harness now exists and runs **green locally**; the `rstep-gate` CI job is
-committed and INFORMATIONAL (first `main` run pending — nothing was pushed
-in the overnight build). It runs **against `ProvisionalDevGate`**, asserting
-the provisional basis verbatim. Per the acceptance-integrity rule
-(`docs/RELEASE-DEFINITION.md`, `CONTRIBUTING.md`), this green is engineering
-evidence, **not** Phase 1.3 acceptance — `docs/ROADMAP.md` 1.3 stays
-not-accepted. Acceptance happens exactly once, at Phase B's exit (B8),
-against the sovereign gate, when the harness's `EXPECT_BASIS` flips to the
-sovereign process name. The ledger is read only through the trusted,
-assertion-only Rust verifier (`examples/verify-export-audit.rs`) which emits
-no row contents; that verifier is the right *place* for Phase B's at-rest
-decryption to live (a node opens its own T3 ledger), but it does **not**
-decrypt anything today — an encrypted ledger will require a cipher/key there
-(Phase B, DG-2).
+**RStep row (updated 2026-07-16 twice: Phase A A3–A7 built the harness;
+B3 reworked it to the sovereign gate — acceptance still deferred to
+M5/B8.** The 1.3d harness runs **against the sovereign
+`RecordedConsentGate`**: it records a fixture agreement through the
+LocalOperator path (`examples/record-consent.rs`), drives a
+node-witnessed session, and asserts `EXPECT_PROCESS` and `EXPECT_BASIS`
+independently plus provisional-wording exclusivity — the B8 bar. The
+`rstep-gate` CI job is INFORMATIONAL. Per the acceptance-integrity rule
+(`docs/RELEASE-DEFINITION.md`, `CONTRIBUTING.md`), this green is
+engineering evidence, **not** Phase 1.3 acceptance — `docs/ROADMAP.md`
+1.3 stays not-accepted. Acceptance happens exactly once, at Phase B's
+exit (B8), as the single observed acceptance run. The ledger is read
+only through the trusted, assertion-only Rust verifier
+(`examples/verify-export-audit.rs`) which emits no row contents; that
+verifier is the right *place* for Phase B's at-rest decryption to live
+(a node opens its own T3 ledger), but it does **not** decrypt anything
+today — an encrypted ledger will require a cipher/key there (B4,
+DG-2).
 
 Fixtures: `scripts/make_geopack_fixtures.py` → committed synthetic sets
 in `data/fixtures/geopack/` (dem+parcels for 0.3; landcover+flood

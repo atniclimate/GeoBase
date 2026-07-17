@@ -1174,11 +1174,14 @@ version = "0.1.0"
 dependencies = [
  "geobase-core",
  "geobase-tsdf",
+ "getrandom 0.3.4",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tiff",
+ "time",
 ]
 
 [[package]]

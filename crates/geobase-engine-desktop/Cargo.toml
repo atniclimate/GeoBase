@@ -32,6 +32,9 @@ tauri = { version = "2", optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
+# Enable the store-less ProvisionalDevGate ONLY for this crate's tests /
+# examples (review B3 F1b): a normal `cargo build` never sees it.
+geobase-gpkg = { workspace = true, features = ["test-support"] }
 
 [features]
 # The Tauri desktop shell is feature-gated so `cargo build --workspace`

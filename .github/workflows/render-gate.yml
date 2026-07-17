@@ -133,17 +133,19 @@ jobs:
           path: engine-light/verify-out/layers/
 
   rstep-gate:
-    # Phase A microtask A5 (PLAN_1.0.md). The RStep 1.3d observed-behavior
-    # gate: paint -> export -> product-only shapefile, re-proven by the
-    # pyogrio oracle and the trusted Rust audit verifier, with both negative
-    # controls. INFORMATIONAL until five consecutive greens on main (house
-    # rule, this file's header). PROVISIONAL-GATE LABEL: it runs against
-    # ProvisionalDevGate and asserts the provisional basis verbatim — GREEN
-    # HERE IS NOT PHASE 1.3 ACCEPTANCE. Acceptance happens exactly once at
-    # Phase B's exit (B8), against the sovereign gate, when verify-rstep.mjs's
-    # EXPECT_BASIS flips to the sovereign process name (docs/CEREMONY-GATE.md,
-    # docs/RELEASE-DEFINITION.md acceptance-integrity rule).
-    name: RStep paint→export product-only proof (1.3d, PROVISIONAL gate)
+    # Phase A microtask A5 (PLAN_1.0.md); B3 rework. The RStep 1.3d
+    # observed-behavior gate: recorded consent -> node-witnessed session ->
+    # paint -> export -> product-only bundle, re-proven by the pyogrio
+    # oracle and the trusted Rust audit verifier (full publication-protocol
+    # trail), with both negative controls. INFORMATIONAL until five
+    # consecutive greens on main (house rule, this file's header). Since B3
+    # it runs against the SOVEREIGN RecordedConsentGate and asserts
+    # EXPECT_PROCESS and EXPECT_BASIS independently plus provisional-wording
+    # exclusivity — GREEN HERE IS STILL NOT ACCEPTANCE. The observed
+    # acceptance run happens exactly once at Phase B's exit (B8)
+    # (docs/CEREMONY-DESIGN.md §8/§11, docs/RELEASE-DEFINITION.md
+    # acceptance-integrity rule).
+    name: RStep paint→export product-only proof (1.3d, sovereign gate — green ≠ acceptance)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,11 +171,12 @@ jobs:
         run: pnpm --filter @geobase/solo-sdk --filter @geobase/rstep build
       - name: F7.4 pack-driven honesty check (A6)
         run: pnpm --filter @geobase/rstep run check:pack-driven
-      - name: Build geopack CLI, node example, and the audit verifier
+      - name: Build geopack CLI, node example, audit verifier, and consent recorder
         run: |
           cargo build --locked -p geobase-ingestor --bin geopack
           cargo build --locked -p geobase-engine-desktop --example node
           cargo build --locked -p geobase-engine-desktop --example verify-export-audit
+          cargo build --locked -p geobase-engine-desktop --example record-consent
       - name: "Run the RStep gate (self-contained: packages, boots, drives, re-proves)"
         env:
           RSTEP_ORACLE_PYTHON: python

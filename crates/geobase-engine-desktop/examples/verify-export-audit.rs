@@ -22,6 +22,8 @@
 //!     [--expect-action NAME]...        # exact, ordered, exhaustive for the product
 //!     [--expect-actor ACTOR]           # every product row's actor must equal this
 //!     [--expect-basis-contains S]      # export.ceremony rows must contain S in basis
+//!     [--expect-basis S]               # export.ceremony rows' basis must EXACTLY equal S
+//!     [--expect-process S]             # export.ceremony rows' process must EXACTLY equal S
 //!     [--forbid-substring S]...        # NO row's serialized form may contain S
 //! ```
 //!
@@ -50,6 +52,8 @@ fn main() {
     let mut expect_actions: Vec<String> = Vec::new();
     let mut expect_actor: Option<String> = None;
     let mut expect_basis_contains: Option<String> = None;
+    let mut expect_basis: Option<String> = None;
+    let mut expect_process: Option<String> = None;
     let mut forbid_substrings: Vec<String> = Vec::new();
     while let Some(flag) = args.next() {
         let mut value_for = |flag: &str| match args.next() {
@@ -62,6 +66,12 @@ fn main() {
             "--expect-basis-contains" => {
                 expect_basis_contains = Some(value_for("--expect-basis-contains"));
             }
+            // EXACT basis / process on the export.ceremony row (review B3
+            // F9): the B8 bar asserts EXPECT_PROCESS and EXPECT_BASIS
+            // independently, not a substring, and against the PERSISTED
+            // row, not only the HTTP response.
+            "--expect-basis" => expect_basis = Some(value_for("--expect-basis")),
+            "--expect-process" => expect_process = Some(value_for("--expect-process")),
             "--forbid-substring" => forbid_substrings.push(value_for("--forbid-substring")),
             other => fail(&format!("unknown flag {other}")),
         }
@@ -132,20 +142,38 @@ fn main() {
             }
         }
     }
-    if let Some(needle) = &expect_basis_contains {
+    // Ceremony-row field checks (substring and/or exact).
+    if expect_basis_contains.is_some() || expect_basis.is_some() || expect_process.is_some() {
         let ceremonies: Vec<_> = product_rows
             .iter()
             .filter(|row| row.action == "export.ceremony")
             .collect();
         if ceremonies.is_empty() {
-            fail("no export.ceremony row to check --expect-basis-contains against");
+            fail("no export.ceremony row to check basis/process against");
         }
         for (index, row) in ceremonies.iter().enumerate() {
             let basis = row.details["basis"].as_str().unwrap_or("");
-            if !basis.contains(needle.as_str()) {
-                fail(&format!(
-                    "ceremony row #{index} basis did not contain the expected substring"
-                ));
+            let process = row.details["process"].as_str().unwrap_or("");
+            if let Some(needle) = &expect_basis_contains {
+                if !basis.contains(needle.as_str()) {
+                    fail(&format!(
+                        "ceremony row #{index} basis did not contain the expected substring"
+                    ));
+                }
+            }
+            if let Some(exact) = &expect_basis {
+                if basis != exact {
+                    fail(&format!(
+                        "ceremony row #{index} basis did not exactly match EXPECT_BASIS"
+                    ));
+                }
+            }
+            if let Some(exact) = &expect_process {
+                if process != exact {
+                    fail(&format!(
+                        "ceremony row #{index} process did not exactly match EXPECT_PROCESS"
+                    ));
+                }
             }
         }
     }

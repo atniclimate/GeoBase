@@ -95,13 +95,20 @@ export interface ExportFeature {
   score: number;
 }
 
-/** `POST /api/export` request body. */
+/**
+ * `POST /api/export` request body — B3 shape (breaking change, recorded
+ * in `docs/CEREMONY-DESIGN.md` §2.4): the pre-B3 `source_packs` and
+ * `requester` fields are REFUSED by the node. The source set is the
+ * node's own witnessed record for `session`; identity is authenticated
+ * node-side, never claimed by the app.
+ */
 export interface ExportRequestBody {
   /** Product name `^[a-z0-9][a-z0-9_-]*$` — the output file stem. */
   product: string;
-  /** Catalog ids the product derives from (>= 1). */
-  source_packs: string[];
-  requester: string;
+  /** The node-witnessed export session id (`NodeClient.beginSession`).
+   *  Optional here: `exportProduct` fills it from the client's active
+   *  session when omitted. */
+  session?: string;
   purpose?: string;
   features: ExportFeature[];
 }
@@ -114,6 +121,7 @@ export interface ExportOutcome {
   files: Record<string, { name: string; sha256: string }>;
   area_m2_total: number;
   ceremony: { process: string; basis: string };
+  publication_id: string;
   audit_ids: number[];
 }
 
@@ -147,6 +155,7 @@ export interface NodeClientOptions {
 export class NodeClient {
   readonly baseUrl: string;
   private readonly exportToken?: string;
+  private activeSession?: string;
 
   constructor(baseUrl: string, options?: NodeClientOptions) {
     const parsed = new URL(baseUrl);
@@ -166,6 +175,37 @@ export class NodeClient {
     return this.getArray<PackSummary>("/api/packs");
   }
 
+  /**
+   * Begin a node-witnessed export session (B3, `docs/CEREMONY-DESIGN.md`
+   * §4). Every pack subsequently served through this client is witnessed
+   * by the node into the session, and the export's source set is the
+   * NODE'S record — the app can neither add nor subtract. Call this
+   * before fetching layers/features that the painted product derives
+   * from; without a session no export can be authorized.
+   */
+  async beginSession(): Promise<string> {
+    // Issuance requires the operator token (the session is operator-bound,
+    // review B3 F2) — sent here and on export, never on read endpoints.
+    const headers: Record<string, string> = {};
+    if (this.exportToken !== undefined) {
+      headers["x-geobase-export-token"] = this.exportToken;
+    }
+    const body = await this.requestObject<{ session: string }>("/api/sessions", {
+      method: "POST",
+      headers,
+    });
+    if (typeof body.session !== "string" || body.session === "") {
+      throw new Error("node did not return a session id");
+    }
+    this.activeSession = body.session;
+    return body.session;
+  }
+
+  /** The active export session id, if `beginSession` has been called. */
+  session(): string | undefined {
+    return this.activeSession;
+  }
+
   layers(pack: string): Promise<PackLayers> {
     return this.getObject<PackLayers>(`/api/packs/${encodeURIComponent(pack)}/layers`);
   }
@@ -176,11 +216,20 @@ export class NodeClient {
     );
   }
 
-  /** POST /api/export. Refusals (403 ceremony/token, 400 invalid, 409
-   *  exists) reject with `NodeRequestError` carrying the server's reason.
-   *  When the client holds an export token it is passed explicitly here —
-   *  and only here; read endpoints never send it. */
+  /** POST /api/export. Refusals (403 ceremony/token/session, 400 invalid,
+   *  409 exists, 503 infrastructure) reject with `NodeRequestError`
+   *  carrying the server's reason. The session defaults to the client's
+   *  active one; the export token is passed explicitly here — and only
+   *  here; read endpoints never send it. */
   exportProduct(body: ExportRequestBody): Promise<ExportOutcome> {
+    const session = body.session ?? this.activeSession;
+    if (session === undefined) {
+      throw new Error(
+        "no export session — call beginSession() before loading source layers " +
+          "(the node witnesses served packs into the session; an export " +
+          "without one is refused)",
+      );
+    }
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.exportToken !== undefined) {
       headers["x-geobase-export-token"] = this.exportToken;
@@ -188,7 +237,7 @@ export class NodeClient {
     return this.requestObject<ExportOutcome>("/api/export", {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, session }),
     });
   }
 
@@ -213,6 +262,14 @@ export class NodeClient {
   }
 
   private async request(path: string, init: RequestInit): Promise<unknown> {
+    // Attach the active session to READ requests so the node witnesses
+    // every served pack into it (non-breaking header addition, B3 §4).
+    if (this.activeSession !== undefined && init.method === "GET") {
+      init.headers = {
+        ...(init.headers as Record<string, string> | undefined),
+        "x-geobase-session": this.activeSession,
+      };
+    }
     const response = await fetch(`${this.baseUrl}${path}`, init);
     const body = await parseJson(response);
     if (!response.ok) {
@@ -302,15 +359,13 @@ export interface SoloApp {
   /**
    * Export the painted product through the node (`POST /api/export`).
    * The node's ceremony seam + export verifier enforce
-   * zero-source-disclosure; the app only assembles the request. Files
-   * stay in the node's exports dir — nothing is downloaded and nothing
-   * leaves the machine.
+   * zero-source-disclosure; the app only assembles the request — the
+   * source set is the node's witnessed session record and the requester
+   * identity is authenticated node-side (B3: the app no longer names
+   * either). Files stay in the node's exports dir — nothing is
+   * downloaded and nothing leaves the machine.
    */
-  exportProduct(
-    product: string,
-    features: PaintedFeature[],
-    requester: string,
-  ): Promise<ExportOutcome>;
+  exportProduct(product: string, features: PaintedFeature[]): Promise<ExportOutcome>;
 }
 
-export const SOLO_SDK_VERSION = "0.2.0";
+export const SOLO_SDK_VERSION = "0.3.0";
