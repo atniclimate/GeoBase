@@ -127,18 +127,19 @@ def key_of(kind, r):
     return (r.get("doc_id"), r.get("content_version"))
 
 
-def records_equivalent(merged, other):
-    """Equal, ignoring fields the merged (authoritative) copy has redacted —
-    a stale slice copy of a since-redacted record is not a conflict."""
+def classify_duplicate(merged, other):
+    """'equal' | 'stale-redacted' (differs only in fields the authoritative
+    copy has redacted — a partially-completed redaction) | 'conflict'."""
     if merged == other:
-        return True
-    masked = {f for f, v in merged.items()
+        return "equal"
+    masked = {f for f, v in list(merged.items()) + list(other.items())
               if isinstance(v, str) and v.startswith("[REDACTED:")}
-    if not masked:
-        return False
-    a = {f: v for f, v in merged.items() if f not in masked}
-    b = {f: v for f, v in other.items() if f not in masked}
-    return a == b
+    if masked:
+        a = {f: v for f, v in merged.items() if f not in masked}
+        b = {f: v for f, v in other.items() if f not in masked}
+        if a == b:
+            return "stale-redacted"
+    return "conflict"
 
 
 def lane_of_slice(path, stem):
@@ -246,9 +247,15 @@ def collect(ctx):
             k = key_of(kind, r)
             if k is None or k == (None, None):
                 continue
-            if k in seen and not records_equivalent(seen[k][2], r):
+            if k in seen:
+                verdict = classify_duplicate(seen[k][2], r)
                 pp, pi, _ = seen[k]
-                ctx.err(f"{path.name}:{i}", f"key conflict {k}: differs from {pp.name}:{pi}")
+                if verdict == "conflict":
+                    ctx.err(f"{path.name}:{i}", f"key conflict {k}: differs from {pp.name}:{pi}")
+                elif verdict == "stale-redacted":
+                    ctx.err(f"{path.name}:{i}",
+                            f"partially-redacted record {k}: an unredacted copy remains "
+                            "— re-run the redact transaction to complete it")
             seen.setdefault(k, (path, i, r))
         ctx.data[kind] = {"merged_path": merged_path, "merged": merged,
                           "slices": slices, "by_key": seen}
@@ -789,6 +796,8 @@ def redact(ctx, event_id, fields):
                   f"document's bytes are removed/rejected (state '{state}')")
             sys.exit(1)
 
+    staged = []  # (tmp, path, changed) — two-phase: write all tmps, then rename all
+
     def apply(path, kinds_fields):
         recs = load_jsonl(Ctx(ctx.root), path)  # fresh parse, findings discarded
         changed = 0
@@ -797,7 +806,7 @@ def redact(ctx, event_id, fields):
             key = r.get("event_id") or (r.get("doc_id"), r.get("content_version"))
             if key in kinds_fields:
                 for f in kinds_fields[key]:
-                    if r.get(f) is not None:
+                    if r.get(f) is not None and r[f] != sentinel:
                         r[f] = sentinel
                         changed += 1
             out.append(r)
@@ -805,7 +814,7 @@ def redact(ctx, event_id, fields):
             tmp = path.with_suffix(".jsonl.tmp")
             tmp.write_text("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
                                    for r in out), encoding="utf-8", newline="\n")
-            tmp.replace(path)
+            staged.append((tmp, path, changed))
         return changed
 
     def all_paths(kind):
@@ -818,20 +827,28 @@ def redact(ctx, event_id, fields):
                       if p.name != f"{stem}.jsonl"]
         return paths
 
-    n = apply(ctx.data["log"]["merged_path"], {event_id: fields})
-    if n == 0:
+    if not any(r.get("event_id") == event_id
+               for _, _, r in ctx.data["log"]["merged"]):
         print(f"ERROR: {event_id} not present in the MERGED log (merge slices first); "
               "slices are lane-owned — redact after merge")
         sys.exit(1)
-    for p in all_paths("log")[1:]:
+    n = 0
+    for p in all_paths("log"):
         n += apply(p, {event_id: fields})
     m = 0
     if (REDACT_URLISH & set(fields)) and target.get("action") in ("fetch", "refetch"):
         mf = [f for f in ("source_url", "final_url") if "url" in fields or f in fields]
         for p in all_paths("manifest"):
             m += apply(p, {doc_key: mf or ["source_url", "final_url"]})
-    print(f"redacted {n} field(s) on {event_id} (+{m} manifest field(s)) — sentinel "
-          f"{sentinel}; re-run validate to confirm closure")
+    if not staged:
+        print(f"nothing to redact — {event_id} already carries the sentinel everywhere")
+        return
+    for tmp, path, _ in staged:  # rename phase: all tmps written before any lands
+        tmp.replace(path)
+    print(f"redacted {n} field(s) on {event_id} (+{m} manifest field(s)) across "
+          f"{len(staged)} file(s) — sentinel {sentinel}; re-run validate to confirm closure. "
+          "The transaction is idempotent: if it is ever interrupted, validate reports "
+          "'partially-redacted record' and re-running the same command completes it.")
 
 
 def run_validate(ctx, with_coverage):
@@ -862,10 +879,13 @@ def main():
         collect(ctx)
         compute_states(ctx)
         cross_checks(ctx)
-        if ctx.findings:
-            print(f"REFUSING redaction — {len(ctx.findings)} integrity finding(s) "
+        # Tolerate only partial-redaction findings — those are exactly what an
+        # idempotent redact re-run heals; everything else fails closed.
+        blocking = [f for f in ctx.findings if "partially-redacted record" not in f]
+        if blocking:
+            print(f"REFUSING redaction — {len(blocking)} integrity finding(s) "
                   "must be resolved first (fail-closed):")
-            for f in ctx.findings:
+            for f in blocking:
                 print(f"  {f}")
             sys.exit(1)
         redact(ctx, sys.argv[2], [f.strip() for f in sys.argv[3].split(",") if f.strip()])

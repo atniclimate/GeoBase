@@ -274,6 +274,20 @@ def main():
             (tmp / "corpus" / "MANIFEST.jsonl").read_text(encoding="utf-8")
         check("policy.pdf" not in man_texts,
               "sensitive URL gone from merged + slice manifests", man_texts)
+
+        # crash recovery: restore the original line in the slice (simulating a
+        # crash between renames) — validate must fail loudly, and re-running
+        # the same redact command must heal it
+        redacted_slice = log.read_text(encoding="utf-8")
+        crashed = redacted_slice.replace(slice_line,
+                                         json.dumps(fetch, sort_keys=True))
+        log.write_text(crashed, encoding="utf-8")
+        expect(tmp, "validate", False,
+               "NEGATIVE: interrupted redaction detected as partially-redacted record")
+        r = run(tmp, "redact", "ev-test-0002", "url,notes,terms_check")
+        check(r.returncode == 0, "idempotent redact re-run heals the partial state",
+              r.stdout + r.stderr)
+        expect(tmp, "validate", True, "post-heal state validates clean")
         expect(tmp, "validate", True, "post-redaction state validates clean")
 
         # coverage: Nation-bound evidence required

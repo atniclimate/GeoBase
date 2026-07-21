@@ -58,5 +58,5 @@ Read the charter before fetching anything.
 - DS-0 infrastructure: scaffolded 2026-07-21 and hardened through three
   Codex adversarial rounds (`../../../_reviews/geobase/`, the workspace
   review archive outside this repo); gate tooling proven by
-  `tools/lifecycle_selftest.py` (30 checks). Ready to launch DS-1
+  `tools/lifecycle_selftest.py` (33 checks). Ready to launch DS-1
   (see `docs/handoffs/CURRENT.md` for the launch sequence).
