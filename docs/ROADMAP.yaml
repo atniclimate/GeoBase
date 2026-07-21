@@ -16,7 +16,7 @@
 
 schema_version: 1
 last_trueup: "2026-07-21"
-verified_green_commit: "6d4a632"  # all 5 workflows green (CI, Render Gate, GeoPack Gate, License Audit, Pages); 2026-07-21 trueup commit CI pending at write time — see handoff
+verified_green_commit: "d048fda"  # all 5 workflows green (CI, Render Gate, GeoPack Gate, License Audit, Pages), verified 2026-07-21
 
 project:
   name: GeoBase
