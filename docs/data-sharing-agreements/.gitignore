@@ -4,3 +4,4 @@ corpus/*
 !corpus/MANIFEST*.jsonl
 !corpus/README.md
 !corpus/manifest.schema.json
+.lane-tmp/
