@@ -494,16 +494,20 @@ def cross_checks(ctx):
         if ev is not None:
             def _red(v):
                 return isinstance(v, str) and v.startswith("[REDACTED:")
-            log_red = _red(ev.get("url")) or _red(ev.get("final_url"))
-            man_red = _red(r.get("source_url")) or _red(r.get("final_url"))
-            if log_red and not man_red and (r.get("source_url") or r.get("final_url")):
-                ctx.err(w, f"partially-redacted record {(r.get('doc_id'), r.get('content_version'))}: "
-                        "fetch URL is redacted but the manifest retains the sensitive URL "
-                        "— re-run the redact transaction to complete it")
-            elif man_red and not log_red and (ev.get("url") or ev.get("final_url")):
-                ctx.err(w, f"partially-redacted record {(r.get('doc_id'), r.get('content_version'))}: "
-                        "manifest URL is redacted but the fetch event retains the sensitive URL "
-                        "— re-run the redact transaction to complete it")
+            # field-level pairs: a sentinel on one side of a pair with a real
+            # value on the other is an interrupted redaction, per field —
+            # one redacted field must not mask another still-sensitive one
+            pairs = [("url", ev.get("url"), "source_url", r.get("source_url")),
+                     ("final_url", ev.get("final_url"), "final_url", r.get("final_url"))]
+            for lf, lv, mf_name, mv in pairs:
+                if _red(lv) and not _red(mv) and mv:
+                    ctx.err(w, f"partially-redacted record {(r.get('doc_id'), r.get('content_version'))}: "
+                            f"fetch {lf} is redacted but manifest {mf_name} retains the sensitive URL "
+                            "— re-run the redact transaction to complete it")
+                elif _red(mv) and not _red(lv) and lv:
+                    ctx.err(w, f"partially-redacted record {(r.get('doc_id'), r.get('content_version'))}: "
+                            f"manifest {mf_name} is redacted but fetch {lf} retains the sensitive URL "
+                            "— re-run the redact transaction to complete it")
         cv, sh = r.get("content_version"), r.get("sha256")
         if cv and sh and not cv.endswith(sh[:8]):
             ctx.err(w, "content_version hash suffix does not match sha256")
@@ -853,9 +857,14 @@ def redact(ctx, event_id, fields):
         n += apply(p, {event_id: fields})
     m = 0
     if (REDACT_URLISH & set(fields)) and target.get("action") in ("fetch", "refetch"):
-        mf = [f for f in ("source_url", "final_url") if "url" in fields or f in fields]
+        # field-level pairing: url -> source_url, final_url -> final_url
+        mf = []
+        if "url" in fields:
+            mf.append("source_url")
+        if "final_url" in fields:
+            mf.append("final_url")
         for p in all_paths("manifest"):
-            m += apply(p, {doc_key: mf or ["source_url", "final_url"]})
+            m += apply(p, {doc_key: mf})
     if not staged:
         print(f"nothing to redact — {event_id} already carries the sentinel everywhere")
         return

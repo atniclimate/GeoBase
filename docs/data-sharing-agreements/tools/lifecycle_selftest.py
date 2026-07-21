@@ -111,7 +111,8 @@ def main():
         (tmp / lp).write_bytes(payload)
         fetch = {"event_id": "ev-test-0002", "ts": "2026-07-21T18:01:00Z",
                  "actor": "codex/gpt-5.6-terra", "lane": "test", "action": "fetch",
-                 "url": "https://example.org/policy.pdf", "http_status": 200,
+                 "url": "https://example.org/policy.pdf",
+                 "final_url": "https://example.org/policy-real.pdf", "http_status": 200,
                  "robots_ok": True, "robots_evidence": "https://example.org/robots.txt allow *",
                  "user_agent": "ATNI-GeoBase-PolicyCorpus/1.0", "terms_ok": True,
                  "terms_check": "public gov doc, no ToS restriction",
@@ -122,7 +123,8 @@ def main():
         jl(log, fetch)
         jl(man, {"doc_id": "example-research-code", "content_version": cv,
                  "local_path": lp, "source_id": "src-example-policy",
-                 "source_url": "https://example.org/policy.pdf", "sha256": sha,
+                 "source_url": "https://example.org/policy.pdf",
+                 "final_url": "https://example.org/policy-real.pdf", "sha256": sha,
                  "size_bytes": len(payload), "content_type": "application/pdf",
                  "retrieved_at": "2026-07-21T18:01:00Z", "fetch_event": "ev-test-0002",
                  "nation_authored": True})
@@ -310,6 +312,27 @@ def main():
         check("policy.pdf" not in man_texts2,
               "sensitive URL gone from manifests after heal", man_texts2)
         expect(tmp, "validate", True, "post-manifest-heal state validates clean")
+
+        # field-level pairing: manifest final_url sentineled while the fetch
+        # event's final_url is still real — one redacted field must not mask
+        # another still-sensitive URL field
+        for mpath in (man, tmp / "corpus" / "MANIFEST.jsonl"):
+            rows = []
+            for line in mpath.read_text(encoding="utf-8").splitlines():
+                rec = json.loads(line)
+                if rec.get("doc_id") == "example-research-code":
+                    rec["final_url"] = "[REDACTED:ev-test-0013]"
+                rows.append(json.dumps(rec, sort_keys=True))
+            mpath.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        expect(tmp, "validate", False,
+               "NEGATIVE: redacted manifest final_url with real fetch final_url detected per-field")
+        r = run(tmp, "redact", "ev-test-0002", "final_url")
+        check(r.returncode == 0, "redact of final_url pair heals the asymmetry",
+              r.stdout + r.stderr)
+        full_texts = (tmp / "provenance" / "access-log.jsonl").read_text(encoding="utf-8") +             log.read_text(encoding="utf-8")
+        check("policy-real.pdf" not in full_texts,
+              "sensitive final_url physically gone from retained logs", full_texts[-500:])
+        expect(tmp, "validate", True, "post-field-heal state validates clean")
         expect(tmp, "validate", True, "post-redaction state validates clean")
 
         # coverage: Nation-bound evidence required
