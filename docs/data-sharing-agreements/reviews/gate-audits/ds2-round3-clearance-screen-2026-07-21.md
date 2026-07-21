@@ -104,3 +104,18 @@ with extractable text and page counts matching their titles. Specifics:
 Summary: 32 screened — 24 CLEAN, 8 FLAGGED (all signatures-contacts);
 0 integrity failures; 1 nation_authored mislabel (d2bl-001, conservative
 direction) and 1 borderline label noted (wai-005).
+
+---
+
+## Corrective-pass addendum — director screen (claude/director)
+
+Two corrective fetches replacing wrong-content sources (bl-028 forestry
+chapter, bl-030 1998 disposition page):
+
+| doc_id | nation_authored | verdict | basis (one line) |
+|---|---|---|---|
+| r3-004 | false | CLEAN | Complete OLRC page (closing tag present), verified 25 U.S.C. ch. 46 ISDEAA text (§5301 marker present, no forestry-chapter content); no personal data or individual contacts. |
+| r3-005 | false | CLEAN | 4-page govinfo Federal Register PDF verified as EO 13175 full text (65 FR 67249, "Consultation and Coordination With Indian Tribal Governments", signed Nov 6 2000); presidential signature block is the standard printed FR publication format, not an executed-document image; no contacts. |
+
+Integrity: both files render/parse completely; sha256 match manifest
+(verified at merge by the validator).

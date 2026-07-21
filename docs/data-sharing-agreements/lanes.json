@@ -341,7 +341,7 @@
     },
     {
       "lane": "ds2-round3",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-terra@medium",
       "session_uuid": "019f863c-a9bb-72e0-85fd-faaeb1d36f63",
       "hosts": [
@@ -360,6 +360,7 @@
         "epa.gov",
         "frontiersin.org",
         "github.com",
+        "govinfo.gov",
         "grandronde.org",
         "grants.nih.gov",
         "guides.lib.berkeley.edu",
@@ -398,6 +399,7 @@
         "www.epa.gov",
         "www.frontiersin.org",
         "www.github.com",
+        "www.govinfo.gov",
         "www.grandronde.org",
         "www.grants.nih.gov",
         "www.guides.lib.berkeley.edu",
@@ -428,7 +430,7 @@
     },
     {
       "lane": "ds3-d",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f865a-18c6-7773-ad07-b345a94630c5",
       "hosts": []
