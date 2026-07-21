@@ -6,6 +6,7 @@ Usage (from docs/data-sharing-agreements/, or with DSA_ROOT set):
     python tools/merge_validate.py merge               # validate, then two-phase merge of lane slices
     python tools/merge_validate.py coverage            # validate + DS-1 coverage/baseline gate
     python tools/merge_validate.py takedown <doc_id>   # director-only tombstone transaction (fail-closed)
+    python tools/merge_validate.py redact <event_id> <field,...>  # director-only redaction, evidenced by a human correction event
 
 Requires: jsonschema (Draft 2020-12).
 
@@ -126,6 +127,20 @@ def key_of(kind, r):
     return (r.get("doc_id"), r.get("content_version"))
 
 
+def records_equivalent(merged, other):
+    """Equal, ignoring fields the merged (authoritative) copy has redacted —
+    a stale slice copy of a since-redacted record is not a conflict."""
+    if merged == other:
+        return True
+    masked = {f for f, v in merged.items()
+              if isinstance(v, str) and v.startswith("[REDACTED:")}
+    if not masked:
+        return False
+    a = {f: v for f, v in merged.items() if f not in masked}
+    b = {f: v for f, v in other.items() if f not in masked}
+    return a == b
+
+
 def lane_of_slice(path, stem):
     parts = path.name.split(".")
     if len(parts) == 3 and parts[0] == stem and parts[2] == "jsonl":
@@ -231,7 +246,7 @@ def collect(ctx):
             k = key_of(kind, r)
             if k is None or k == (None, None):
                 continue
-            if k in seen and seen[k][2] != r:
+            if k in seen and not records_equivalent(seen[k][2], r):
                 pp, pi, _ = seen[k]
                 ctx.err(f"{path.name}:{i}", f"key conflict {k}: differs from {pp.name}:{pi}")
             seen.setdefault(k, (path, i, r))
@@ -731,6 +746,81 @@ def takedown(ctx, doc_id):
           f"(evidence: {ev['event_id']}); corpus, summaries, and citation scan were clean")
 
 
+REDACT_ALWAYS = {"notes", "robots_evidence", "terms_check", "user_agent"}
+REDACT_URLISH = {"url", "final_url"}
+
+
+def redact(ctx, event_id, fields):
+    """Physically replace sensitive free-text fields of a merged log record
+    with a sentinel, evidenced by a prior human correction event. Fields that
+    participate in FK/hash closure are never redactable; url/final_url of a
+    fetch are redactable only once the document's bytes are removed/rejected
+    (the charter's post-takedown case), and the matching manifest source_url/
+    final_url are redacted in the same transaction so cross-checks hold."""
+    target = None
+    for _, _, r in uniq(ctx, "log"):
+        if r.get("event_id") == event_id:
+            target = r
+            break
+    if target is None:
+        print(f"ERROR: event {event_id} not found in the access log")
+        sys.exit(2)
+    corrections = [r for _, _, r in uniq(ctx, "log")
+                   if r.get("action") == "correction"
+                   and r.get("parent_event") == event_id
+                   and str(r.get("actor", "")).startswith("human/")
+                   and r.get("notes")]
+    if not corrections:
+        print(f"ERROR: no human correction event targeting {event_id} — append one "
+              "(action=correction, parent_event=<target>, notes=<reason>) first")
+        sys.exit(2)
+    corr = sorted(corrections, key=event_order)[-1]
+    sentinel = f"[REDACTED:{corr['event_id']}]"
+    bad = [f for f in fields if f not in REDACT_ALWAYS | REDACT_URLISH]
+    if bad:
+        print(f"ERROR: field(s) not redactable (FK/hash closure): {bad}")
+        sys.exit(2)
+    doc_key = (target.get("doc_id"), target.get("content_version"))
+    if (REDACT_URLISH & set(fields)) and target.get("action") in ("fetch", "refetch"):
+        state = effective_clearance(ctx, doc_key)
+        tombed = target.get("doc_id") in getattr(ctx, "tombstoned", set())
+        if state not in ("removed", "rejected") and not tombed:
+            print(f"ERROR: url/final_url of a fetch are redactable only after the "
+                  f"document's bytes are removed/rejected (state '{state}')")
+            sys.exit(1)
+
+    def apply(path, kinds_fields):
+        recs = load_jsonl(Ctx(ctx.root), path)  # fresh parse, findings discarded
+        changed = 0
+        out = []
+        for _, _, r in recs:
+            key = r.get("event_id") or (r.get("doc_id"), r.get("content_version"))
+            if key in kinds_fields:
+                for f in kinds_fields[key]:
+                    if r.get(f) is not None:
+                        r[f] = sentinel
+                        changed += 1
+            out.append(r)
+        if changed:
+            tmp = path.with_suffix(".jsonl.tmp")
+            tmp.write_text("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                   for r in out), encoding="utf-8", newline="\n")
+            tmp.replace(path)
+        return changed
+
+    n = apply(ctx.data["log"]["merged_path"], {event_id: fields})
+    if n == 0:
+        print(f"ERROR: {event_id} not present in the MERGED log (merge slices first); "
+              "slices are lane-owned — redact after merge")
+        sys.exit(1)
+    m = 0
+    if (REDACT_URLISH & set(fields)) and target.get("action") in ("fetch", "refetch"):
+        mf = [f for f in ("source_url", "final_url") if "url" in fields or f in fields]
+        m = apply(ctx.data["manifest"]["merged_path"], {doc_key: mf or ["source_url", "final_url"]})
+    print(f"redacted {n} field(s) on {event_id} (+{m} manifest field(s)) — sentinel "
+          f"{sentinel}; re-run validate to confirm closure")
+
+
 def run_validate(ctx, with_coverage):
     collect(ctx)
     compute_states(ctx)
@@ -747,11 +837,26 @@ def run_validate(ctx, with_coverage):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("validate", "merge", "coverage", "takedown"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("validate", "merge", "coverage", "takedown", "redact"):
         print(__doc__)
         sys.exit(2)
     mode = sys.argv[1]
     ctx = Ctx(get_root())
+    if mode == "redact":
+        if len(sys.argv) != 4:
+            print("usage: merge_validate.py redact <event_id> <field,field,...>")
+            sys.exit(2)
+        collect(ctx)
+        compute_states(ctx)
+        cross_checks(ctx)
+        if ctx.findings:
+            print(f"REFUSING redaction — {len(ctx.findings)} integrity finding(s) "
+                  "must be resolved first (fail-closed):")
+            for f in ctx.findings:
+                print(f"  {f}")
+            sys.exit(1)
+        redact(ctx, sys.argv[2], [f.strip() for f in sys.argv[3].split(",") if f.strip()])
+        sys.exit(0)
     if mode == "takedown":
         if len(sys.argv) != 3:
             print("usage: merge_validate.py takedown <doc_id>")

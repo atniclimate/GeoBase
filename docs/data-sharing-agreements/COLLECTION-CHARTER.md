@@ -155,9 +155,15 @@ reproducible source.
   replace the catalog record with a tombstone (entity, title, reason,
   takedown event — requirements/claims removed); (4) delete the summary;
   (5) grep summaries/wiki/guidelines for the doc's `claim_id`s and remove
-  or reattribute every passage before any further publication; (6) redact
-  sensitive URL/path notes from retained log records via `correction`
-  events if the Nation requests; (7) re-run `validate` to prove closure.
+  or reattribute every passage before any further publication; (6) if the
+  Nation requests, physically redact sensitive URL/notes fields from
+  retained log and manifest records via
+  `python tools/merge_validate.py redact <event_id> <fields>` — a
+  director transaction that requires a prior human `correction` event as
+  evidence, replaces the values with a `[REDACTED:<correction-id>]`
+  sentinel, and never touches fields that carry hash/FK closure
+  (plain correction events without the transaction only annotate — they
+  do not redact); (7) re-run `validate` to prove closure.
   This exact lifecycle is exercised by `tools/lifecycle_selftest.py`,
   which must pass before every phase launch.
 

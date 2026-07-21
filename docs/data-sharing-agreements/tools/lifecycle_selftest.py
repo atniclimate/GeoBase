@@ -250,6 +250,24 @@ def main():
         expect(tmp, "merge", True, "post-takedown merge (takedown event into shared log)")
         expect(tmp, "validate", True, "post-takedown state validates clean")
 
+        # redaction: correction event alone does NOT redact; the transaction does
+        r = run(tmp, "redact", "ev-test-0002", "url,notes,terms_check")
+        check(r.returncode != 0, "NEGATIVE: redaction refused without a human correction event",
+              r.stdout + r.stderr)
+        jl(log, {"event_id": "ev-test-0013", "ts": "2026-07-21T18:09:00Z",
+                 "actor": "human/patrick", "lane": "test", "action": "correction",
+                 "url": "provenance/access-log.jsonl", "parent_event": "ev-test-0002",
+                 "notes": "Nation requested URL redaction (drill)"})
+        expect(tmp, "merge", True, "merge correction event into shared log")
+        r = run(tmp, "redact", "ev-test-0002", "url,notes,terms_check")
+        check(r.returncode == 0, "redact transaction rewrote the merged record",
+              r.stdout + r.stderr)
+        merged_log = (tmp / "provenance" / "access-log.jsonl").read_text(encoding="utf-8")
+        fetch_line = next(l for l in merged_log.splitlines() if '"ev-test-0002"' in l)
+        check("policy.pdf" not in fetch_line and "[REDACTED:ev-test-0013]" in fetch_line,
+              "sensitive URL physically gone from the retained fetch record", fetch_line)
+        expect(tmp, "validate", True, "post-redaction state validates clean")
+
         # coverage: Nation-bound evidence required
         expect(tmp, "coverage", False, "NEGATIVE: coverage gate fails without matrix + roster receipt")
         nations = json.loads((tmp / "sources" / "nations.json").read_text(encoding="utf-8"))["nations"]

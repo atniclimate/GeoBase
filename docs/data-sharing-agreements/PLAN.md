@@ -57,7 +57,7 @@ takedown, archive-auth; fetch gating on effective register approval +
 publication-intent evidence; per-lane host allowlists + global 5s/host
 spacing; Nation-bound coverage evidence; baseline-inventory closure;
 two-phase merge; fail-closed transitive takedown transaction), synthetic
-lifecycle drill (`tools/lifecycle_selftest.py`, 23 checks incl. negative
+lifecycle drill (`tools/lifecycle_selftest.py`, 28 checks incl. negative
 cases — must pass before every phase launch),
 canonical denominator (`sources/nations.json` + `NATIONS.md`), machine lane
 registry (`lanes.json` + `LANES.md`), baseline-inventory scope
