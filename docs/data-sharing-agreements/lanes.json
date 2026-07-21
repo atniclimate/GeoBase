@@ -320,21 +320,21 @@
     },
     {
       "lane": "ds3-a",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f8610-53cd-7c91-89c0-178d6a281273",
       "hosts": []
     },
     {
       "lane": "ds3-b",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f8610-7aeb-75f1-91a7-81c979de80a6",
       "hosts": []
     },
     {
       "lane": "ds3-c",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f8610-ac27-76c0-9129-3d5a4c5e9d86",
       "hosts": []
