@@ -69,6 +69,14 @@ requirements.
   needed to identify them.
 - Prefer official copies (the Nation's own site over aggregators); record
   `official_source` in the register.
+- **Third-party legal publishers** (Municode, NARF/NILL, Thorpe, eCode360,
+  Code Publishing, and peers) are discovery indexes, not fetch sources.
+  Fetching a Tribal instrument from such a host requires BOTH: (a) the
+  Nation's own site or an official channel designates that publisher as its
+  publication venue, and (b) per-host owner approval after the host's terms
+  are resolved. Presence on an aggregator is never evidence of Nation
+  authorization (owner decision 2026-07-21; NILL's own indexes document
+  Nations that have refused online full-text publication).
 - **Lossless**: preserve raw response bytes + headers; derived snapshots
   (HTML→single-file, OCR text) are separate files with the transformation
   tool recorded in the manifest. Low-confidence OCR requires human review
@@ -119,9 +127,15 @@ State transitions (`clear`/`restrict`/`reject`/`review`/`register-status`/
 states and cross-checks every foreign key, byte hash, and parent-event
 type, so any claim traces to exact bytes.
 
-**Registered human actors** (owner-recorded): `human/patrick-freeland` =
-Patrick Freeland, ATNI Climate, patrickfreeland@atnitribes.org (owner acts:
-clearances, review upgrades, takedown/archive authorization, corrections).
+**Registered human actors** (owner-recorded; contact details in the
+private owner authorization record): `human/patrick-freeland` = Patrick
+Freeland, ATNI Climate (personal owner acts: clearances, review upgrades,
+takedown/archive authorization, corrections);
+`human/patrick-freeland/standing-delegation` = the same owner acting
+through the standing preliminary-analysis clearance (DECISIONS.md
+2026-07-21) — used for director-performed clearance events under that
+standing authorization, so personal and delegated acts are distinguishable;
+each such batch requires owner ratification before downstream use.
 
 Logs are **append-only**: corrections are `correction` events referencing
 the `event_id` of the corrected record. Lanes never write shared files;

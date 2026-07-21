@@ -900,14 +900,15 @@ via director register-status events, full gate audit PASS
 
 **Owner decision (Patrick Freeland, 2026-07-21):** DS-1 gate closed; DS-2
 authorized, including **direct search/probe of Tribal websites and publicly
-accessible databases** for published policies and legislation. Authorization
-basis recorded by the owner: the RSTEP project is T1-authorized via ATNI;
-the RSTEP effort to develop the Data Sovereignty Guidelines is **fully
-authorized as T2** — internally ATNI holds full permissions to conduct this
-search and development under the R-STEP program (**DE-FOA-0003189**).
-Owner intent: Tribal staff capacity is limited, so ATNI will still request
+accessible databases** for published policies and legislation, under
+program authority recorded privately (owner authorization record,
+2026-07-21; kept outside the public tree by owner decision). Owner intent:
+Tribal staff capacity is limited, so ATNI will still request
 additional/updated documents from Tribes directly, but must first "do our
-homework" and locate everything already searchable on the open web.
+homework" and locate everything already searchable on the open web. The
+recorded authority is ATNI-internal program authority to conduct
+public-document research — it is not, and does not claim to be, authority
+granted by any Tribal Nation over its data or instruments.
 
 **Scope note (director):** this authorization changes nothing in
 COLLECTION-CHARTER.md, which already provides for direct probes/fetches —
@@ -921,9 +922,10 @@ searched-not-found Nations; (B) document fetches of director-approved rows.
 **Owner decisions (Patrick Freeland, 2026-07-21, same session — addendum):**
 
 1. **Registered data actor:** `human/patrick-freeland` = Patrick Freeland,
-   ATNI Climate, patrickfreeland@atnitribes.org — usable in the provenance
-   chain for owner acts (clearances, review upgrades, takedown/archive
-   authorization, corrections). Recorded in COLLECTION-CHARTER.md §5.
+   ATNI Climate (contact in the private owner authorization record) —
+   usable in the provenance chain for owner acts (clearances, review
+   upgrades, takedown/archive authorization, corrections). Recorded in
+   COLLECTION-CHARTER.md §5.
 2. **Preliminary analysis authorized:** fetched documents may receive
    preliminary machine analysis (parse for cataloging, summarization) under
    a standing owner clearance, instead of per-document ad-hoc review:
@@ -940,3 +942,35 @@ searched-not-found Nations; (B) document fetches of director-approved rows.
      reach effective `human-reviewed` state before guideline use, and all
      outputs stay DRAFT until the external ratification path completes.
      Preliminary analysis widens the funnel, not the mouth of the bottle.
+
+## 2026-07-21 — DSA grilling sitting (owner decisions Q1–Q8, all enacted)
+
+Owner grilled the day's decisions one-by-one (AskUserQuestion receipts):
+
+- **Q1 Standing-clearance attribution:** batch ratification REQUIRED each
+  round before DS-3 consumes a clearance batch; future standing clears use
+  the distinct actor `human/patrick-freeland/standing-delegation`; the
+  2026-07-21 batch of ten Nation-authored clears was re-attributed by
+  correction events and RATIFIED by the owner in the sitting.
+- **Q2 Klamath Special Use Permit:** cleared WITH handling rules — Exhibit
+  A site locations, signatures, and contact details are never excerpted,
+  reproduced, or described in catalog/summary/wiki/guideline content;
+  treated as restricted content per charter §7.
+- **Q3 Grand Ronde FOI ordinance + Colville/Spokane archive pages:** cleared
+  with the institution-not-person rule (no individual names/emails/signature
+  imagery downstream).
+- **Q4 Third-party legal publishers:** fetch ONLY where the Nation's own
+  channel designates the publisher as its publication venue AND the owner
+  approves that host after terms resolve; aggregator presence is never
+  authorization (charter §3 amended).
+- **Q5 Round-2 fetches:** all nine approved (five Colville instruments,
+  Quileute Articles I–XII, Nez Perce Titles 3 and 6, Yakama Water Code).
+- **Q6 Authorization details:** kept out of the public tree for now
+  (private owner record; provenance notes redacted via the sanctioned
+  transaction; git-history purge left as an explicit open maintainer act).
+- **Q7 Searched-not-found depth:** a structured deep sweep (official-site
+  section walk, fixed term list, state/federal agreement databases,
+  university IRB listings — all event-logged) is a MANDATORY pre-outreach
+  gate per Nation (PLAN pre-DS-5 tasks).
+- **Q8 Sequencing:** enact → round-2 acquisition/screen/clear → DS-3
+  preliminary cataloging.

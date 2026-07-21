@@ -37,15 +37,16 @@ append-only provenance chain with schema-enforced completeness, versioned
 refetch, transitive takedown via reuben@atnitribes.org). It does not claim
 TSDF runtime equivalence; nothing here enters the GeoBase data spine.
 
-**Authorization (owner-recorded 2026-07-21, DECISIONS.md):** the RSTEP
-Data Sovereignty Guidelines effort is T2-authorized under the R-STEP
-program (DE-FOA-0003189; RSTEP itself T1 via ATNI) — direct search/probe
-of Tribal websites and publicly accessible databases for published
-instruments is authorized, within the charter's limits (public-only,
-terms-before-bytes, default-refuse, human clearance for Nation-authored
-docs). ATNI still requests additional/updated documents from Nations
-directly; web discovery is the "homework first" complement, not a
-substitute.
+**Authorization (owner-recorded 2026-07-21, DECISIONS.md; program details
+in the private owner authorization record):** direct search/probe of
+Tribal websites and publicly accessible databases for published
+instruments is authorized under ATNI-internal program authority, within
+the charter's limits (public-only, terms-before-bytes, default-refuse,
+human clearance for Nation-authored docs). This is authority to conduct
+public-document research — not authority granted by any Tribal Nation
+over its data or instruments. ATNI still requests additional/updated
+documents from Nations directly; web discovery is the "homework first"
+complement, not a substitute.
 
 **Ratification path (owner-decided 2026-07-21):** the DS-5 Guidelines are a
 *draft* until (1) RSTEP Tribal Advisory Board review/approval, (2) direct
@@ -169,6 +170,16 @@ ratification ledger (`guidelines/RATIFICATION-LEDGER.md`) links Advisory
 Board decisions, per-Nation outreach, IRB reviews, corrections, and final
 disposition to exact claim_ids and content_versions. Acceptance stays
 owner-reserved; external ratification stays with the Nations.
+
+Pre-DS-5 task (owner decision 2026-07-21, grilling Q7): **structured deep
+sweep for every searched-not-found Nation** before outreach — per-Nation
+checklist: official-site section walk (government/court/council/
+departments), site-search queries over a fixed term list (research, data,
+records, IRB, permit, code, archives), state/federal agreement databases,
+university IRB reciprocal listings; every step an event-logged `search`/
+`probe` with `nation_id`. Outreach to a searched-not-found Nation is gated
+on its sweep being complete — "we did our homework" must be literally true
+per Nation.
 
 Pre-DS-5 tooling task (carry-over from review round 3): a `ds5` gate mode
 that parses the draft's citations and verifies every Nation-attributed
