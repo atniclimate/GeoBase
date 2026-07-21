@@ -52,10 +52,11 @@ def main():
     eff_review = {}
     for e in sorted((e for e in log if e.get("action") == "review"),
                     key=lambda x: x["ts"]):
-        eff_review[e.get("doc_id")] = e.get("new_state")
+        eff_review[(e.get("doc_id"), e.get("content_version"))] = e.get("new_state")
     cat_by_nation = defaultdict(list)
     for c in catalog:
-        c["_review"] = eff_review.get(c["doc_id"], c.get("review_state"))
+        c["_review"] = eff_review.get((c["doc_id"], c.get("content_version")),
+                                      c.get("review_state"))
         if c.get("nation_id"):
             cat_by_nation[c["nation_id"]].append(c)
 
