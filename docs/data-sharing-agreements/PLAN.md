@@ -37,6 +37,16 @@ append-only provenance chain with schema-enforced completeness, versioned
 refetch, transitive takedown via reuben@atnitribes.org). It does not claim
 TSDF runtime equivalence; nothing here enters the GeoBase data spine.
 
+**Authorization (owner-recorded 2026-07-21, DECISIONS.md):** the RSTEP
+Data Sovereignty Guidelines effort is T2-authorized under the R-STEP
+program (DE-FOA-0003189; RSTEP itself T1 via ATNI) — direct search/probe
+of Tribal websites and publicly accessible databases for published
+instruments is authorized, within the charter's limits (public-only,
+terms-before-bytes, default-refuse, human clearance for Nation-authored
+docs). ATNI still requests additional/updated documents from Nations
+directly; web discovery is the "homework first" complement, not a
+substitute.
+
 **Ratification path (owner-decided 2026-07-21):** the DS-5 Guidelines are a
 *draft* until (1) RSTEP Tribal Advisory Board review/approval, (2) direct
 outreach to each Nation, (3) Tribal IRB review where one exists, then

@@ -890,3 +890,53 @@ carry-over: a `ds5` citation/ledger gate mode (recorded in PLAN.md).
 
 No acceptance status changed; B8 remains the sole acceptance act; main-line
 resume stays TASK-B4.2-SPEC.
+
+## 2026-07-21 — DSA corpus: DS-1 gate closed; direct-site access authorized (owner decision)
+
+**DS-1 executed and certified same day** (commit `6cab07d`): six search-only
+lanes, 107 register rows, 43/43-Nation coverage matrix, duplicates resolved
+via director register-status events, full gate audit PASS
+(`docs/data-sharing-agreements/reviews/gate-audits/ds1-gate-2026-07-21.md`).
+
+**Owner decision (Patrick Freeland, 2026-07-21):** DS-1 gate closed; DS-2
+authorized, including **direct search/probe of Tribal websites and publicly
+accessible databases** for published policies and legislation. Authorization
+basis recorded by the owner: the RSTEP project is T1-authorized via ATNI;
+the RSTEP effort to develop the Data Sovereignty Guidelines is **fully
+authorized as T2** — internally ATNI holds full permissions to conduct this
+search and development under the R-STEP program (**DE-FOA-0003189**).
+Owner intent: Tribal staff capacity is limited, so ATNI will still request
+additional/updated documents from Tribes directly, but must first "do our
+homework" and locate everything already searchable on the open web.
+
+**Scope note (director):** this authorization changes nothing in
+COLLECTION-CHARTER.md, which already provides for direct probes/fetches —
+it closes the DS-1 gate and directs the work. Charter limits remain
+binding: public-only, terms-before-bytes, robots, honest UA, 5s/host,
+default-refuse on publication ambiguity, human clearance for Nation-authored
+documents, takedown channel unchanged. DS-2 proceeds in two waves:
+(A) verification probes + deepened direct-site discovery for the
+searched-not-found Nations; (B) document fetches of director-approved rows.
+
+**Owner decisions (Patrick Freeland, 2026-07-21, same session — addendum):**
+
+1. **Registered data actor:** `human/patrick-freeland` = Patrick Freeland,
+   ATNI Climate, patrickfreeland@atnitribes.org — usable in the provenance
+   chain for owner acts (clearances, review upgrades, takedown/archive
+   authorization, corrections). Recorded in COLLECTION-CHARTER.md §5.
+2. **Preliminary analysis authorized:** fetched documents may receive
+   preliminary machine analysis (parse for cataloging, summarization) under
+   a standing owner clearance, instead of per-document ad-hoc review:
+   - the automated sensitivity screen (charter §4) remains mandatory and
+     runs first — CLEAN screens proceed; anything flagged (personal data,
+     signatures/contacts, site locations, restricted-TK references,
+     publication ambiguity) still stops for individual human review;
+   - clear events for Nation-authored documents are recorded with actor
+     `human/patrick-freeland` citing this standing decision (the validator's
+     human-actor requirement is unchanged and satisfied honestly — the
+     standing decision IS the owner's clearance act, granted prospectively
+     for clean-screen documents);
+   - the DS-3/DS-5 bar is UNCHANGED: Nation-attributed claims must still
+     reach effective `human-reviewed` state before guideline use, and all
+     outputs stay DRAFT until the external ratification path completes.
+     Preliminary analysis widens the funnel, not the mouth of the bottle.

@@ -1,0 +1,34 @@
+HTTP/1.1 200 OK
+Connection: keep-alive
+Content-Length: 157721
+permissions-policy: accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), cross-origin-isolated=(), display-capture=(), document-domain=(), encrypted-media=(), execution-while-not-rendered=(), execution-while-out-of-viewport=(), fullscreen=(), geolocation=(), gyroscope=(), interest-cohort=(), layout-animations=(), legacy-image-formats=(), magnetometer=(), microphone=(), midi=(), navigation-override=(), oversized-images=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), sync-script=(), sync-xhr=(), usb=(), vertical-scroll=(), web-share=(), wake-lock=(), xr-spatial-tracking=()
+link: <https://localcontexts.org/wp-json/>; rel="https://api.w.org/"
+link: <https://localcontexts.org/wp-json/wp/v2/pages/6>; rel="alternate"; title="JSON"; type="application/json"
+link: <https://localcontexts.org/>; rel=shortlink
+content-security-policy: frame-ancestors 'none'
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+x-content-type-options: nosniff
+x-content-type-options: nosniff
+x-fw-dynamic: TRUE
+x-fw-hash: zwkwj8jxer
+x-fw-version: 5.0.0
+referrer-policy: no-referrer-when-downgrade
+content-type: text/html; charset=UTF-8
+x-xss-protection: 1
+x-xss-protection: 1; mode=block
+x-fw-server: Flywheel/5.1.0
+x-frame-options: SAMEORIGIN
+Server: Flywheel/5.1.0
+X-Cacheable: YES
+Fastly-Restarts: 1
+Accept-Ranges: bytes
+Date: Tue, 21 Jul 2026 18:17:37 GMT
+X-Served-By: cache-bfi-kbfi7400080-BFI, cache-bfi-krnt7300042-BFI
+X-Cache: MISS, MISS
+X-Cache-Hits: 0, 0
+X-Timer: S1784657856.541613,VS0,VE2057
+Vary: Accept-Encoding
+X-FW-Serve: TRUE
+X-FW-Static: NO
+X-FW-Type: FLYWHEEL_BOT
+

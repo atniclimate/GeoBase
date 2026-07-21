@@ -1,0 +1,15 @@
+HTTP/1.1 200 OK
+Accept-Ranges: bytes
+Alt-Svc: h3=":443"; ma=2592000
+Content-Length: 429224
+Content-Type: application/pdf
+Date: Tue, 21 Jul 2026 18:17:06 GMT
+Etag: "68ca8-5bedacf24d9c0"
+Last-Modified: Wed, 31 Mar 2021 20:17:51 GMT
+Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+Referrer-Policy: strict-origin-when-cross-origin
+Strict-Transport-Security: max-age=31536000
+Via: 1.1 Caddy
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+

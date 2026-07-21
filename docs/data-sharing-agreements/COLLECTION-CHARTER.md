@@ -92,7 +92,12 @@ ambiguity. Then:
   auto-cleared (a `clear` event citing the screen result).
 - **Nation-authored documents always require a `clear` event from a
   `human/*` actor** (tool-enforced via the manifest's `nation_authored`
-  flag).
+  flag). *Owner decision 2026-07-21 (DECISIONS.md): a standing owner
+  clearance authorizes preliminary analysis of clean-screen documents —
+  these `clear` events are recorded with actor `human/patrick-freeland`
+  citing the standing decision. Flagged content still stops for individual
+  review; the DS-3 `human-reviewed` bar for Nation-attributed claims and
+  DRAFT labeling are unchanged.*
 - Flagged content → `restrict` event (human then decides: clear with
   handling rules, or `reject`). Rejected files are **deleted**; their
   manifest record and log events remain as the audit trail (the validator
@@ -113,6 +118,10 @@ State transitions (`clear`/`restrict`/`reject`/`review`/`register-status`/
 `supersede`/`takedown`) are events too — the validator computes effective
 states and cross-checks every foreign key, byte hash, and parent-event
 type, so any claim traces to exact bytes.
+
+**Registered human actors** (owner-recorded): `human/patrick-freeland` =
+Patrick Freeland, ATNI Climate, patrickfreeland@atnitribes.org (owner acts:
+clearances, review upgrades, takedown/archive authorization, corrections).
 
 Logs are **append-only**: corrections are `correction` events referencing
 the `event_id` of the corrected record. Lanes never write shared files;

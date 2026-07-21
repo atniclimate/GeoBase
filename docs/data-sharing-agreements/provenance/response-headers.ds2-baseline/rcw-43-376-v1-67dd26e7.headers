@@ -1,0 +1,16 @@
+HTTP/1.1 200 OK
+Cache-Control: private
+Content-Type: text/html; charset=utf-8
+Server: Microsoft-IIS/10.0
+Set-Cookie: ASP.NET_SessionId=1gjq40m0ir1vbcx0dcbyimtj; path=/; HttpOnly; SameSite=Lax
+X-AspNet-Version: 4.0.30319
+X-Powered-By: ASP.NET
+X-OneAgent-JS-Injection: true
+X-ruxit-JS-Agent: true
+Server-Timing: dtTrId;desc="8104ec417c2e89201ed0bcd17221519c", dtSInfo;desc="0"
+Server-Timing: dtRpid;desc="130023889"
+Set-Cookie: dtCookie=v_4_srv_17_sn_4C1A4241A28917CEDED2C4B3733907B2_perc_100000_ol_0_mul_1_app-3A2e5b56cdeef87a27_1_rcs-3Acss_0; Path=/; Domain=.wa.gov
+Date: Tue, 21 Jul 2026 18:17:13 GMT
+Content-Length: 115162
+Set-Cookie: JSESSSIONID=2190070855.1.1479282032.3837591965; path=/; secure
+

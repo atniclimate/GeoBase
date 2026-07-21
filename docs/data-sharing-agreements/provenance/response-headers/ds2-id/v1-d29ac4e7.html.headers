@@ -1,0 +1,36 @@
+HTTP/1.1 301 Moved Permanently
+Server: nginx
+Date: Tue, 21 Jul 2026 18:17:21 GMT
+Content-Type: text/html; charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+X-Powered-By: PHP/8.2.32
+Expires: Wed, 11 Jan 1984 05:00:00 GMT
+Cache-Control: no-cache, must-revalidate, max-age=0, no-store, private
+Permissions-Policy: private-state-token-redemption=(self "https://www.google.com" "https://www.gstatic.com" "https://recaptcha.net" "https://challenges.cloudflare.com" "https://hcaptcha.com"), private-state-token-issuance=(self "https://www.google.com" "https://www.gstatic.com" "https://recaptcha.net" "https://challenges.cloudflare.com" "https://hcaptcha.com")
+X-Redirect-By: WordPress
+X-Content-Type-Options: nosniff
+Location: https://nezperce.org/resources/tribal-code/
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Content-Security-Policy: require-sri-for script style
+Cross-Origin-Resource-Policy: same-origin
+X-Powered-By: PleskLin
+
+HTTP/1.1 200 OK
+Server: nginx
+Date: Tue, 21 Jul 2026 18:17:22 GMT
+Content-Type: text/html; charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+X-Powered-By: PHP/8.2.32
+Permissions-Policy: private-state-token-redemption=(self "https://www.google.com" "https://www.gstatic.com" "https://recaptcha.net" "https://challenges.cloudflare.com" "https://hcaptcha.com"), private-state-token-issuance=(self "https://www.google.com" "https://www.gstatic.com" "https://recaptcha.net" "https://challenges.cloudflare.com" "https://hcaptcha.com")
+Link: <https://nezperce.org/wp-json/>; rel="https://api.w.org/", <https://nezperce.org/wp-json/wp/v2/pages/6928>; rel="alternate"; title="JSON"; type="application/json", <https://nezperce.org/?p=6928>; rel=shortlink
+X-TEC-API-VERSION: v1
+X-TEC-API-ROOT: https://nezperce.org/wp-json/tribe/events/v1/
+X-TEC-API-ORIGIN: https://nezperce.org
+X-Content-Type-Options: nosniff
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Content-Security-Policy: require-sri-for script style
+Cross-Origin-Resource-Policy: same-origin
+X-Powered-By: PleskLin
+
