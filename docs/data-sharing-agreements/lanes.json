@@ -300,6 +300,44 @@
         "www.npaihb.org"
       ],
       "wave": "B"
+    },
+    {
+      "lane": "ds2-round2",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85fe-92ec-7790-8b65-c1bdf34de2bf",
+      "hosts": [
+        "colvilletribes.com",
+        "www.colvilletribes.com",
+        "quileutetribe.com",
+        "www.quileutetribe.com",
+        "nezperce.org",
+        "www.nezperce.org",
+        "yakama.com",
+        "www.yakama.com",
+        "static1.squarespace.com"
+      ]
+    },
+    {
+      "lane": "ds3-a",
+      "status": "active",
+      "worker": "codex gpt-5.6-sol@high",
+      "session_uuid": "019f8610-53cd-7c91-89c0-178d6a281273",
+      "hosts": []
+    },
+    {
+      "lane": "ds3-b",
+      "status": "active",
+      "worker": "codex gpt-5.6-sol@high",
+      "session_uuid": "019f8610-7aeb-75f1-91a7-81c979de80a6",
+      "hosts": []
+    },
+    {
+      "lane": "ds3-c",
+      "status": "active",
+      "worker": "codex gpt-5.6-sol@high",
+      "session_uuid": "019f8610-ac27-76c0-9129-3d5a4c5e9d86",
+      "hosts": []
     }
   ]
 }
