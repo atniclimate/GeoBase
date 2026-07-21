@@ -5,7 +5,7 @@
 > **Non-discovery is not evidence of absence.** "Not found online" means only that this review did not locate a published copy — many instruments are held by custodians and unpublished by sovereign choice.
 
 - **Coverage status (DS-1 gate):** `found`
-- **Register entries:** 47 · **Cataloged documents:** 0 · **Extracted claims:** 0
+- **Register entries:** 47 · **Cataloged documents:** 1 · **Extracted claims:** 0
 
 ## Sources on record
 
@@ -59,7 +59,12 @@
 | src-r3c-0211 | Linked PDF instrument candidate: act5-2.pdf | `candidate` | https://snoqualmietribe.us/wp-content/uploads/TribalCodes/act5-2.pdf |
 | src-wac-006 | Snoqualmie Tribal Code — Public Records Act 5.3 | `approved` | https://www.snoqualmietribe.us/tribal-codes/ |
 
-## Cataloged instruments
+## Cataloged instruments (machine-extracted, DRAFT)
 
-_None yet. See coverage status above; searches for this Nation are logged in the provenance chain._
+### Tribal Codes
+
+- instrument: `other` · legal status: `guidance-nonbinding` · review: `machine-extracted`
+- source: https://www.snoqualmietribe.us/tribal-codes/
+
+_No partner-facing claims extracted. Reason: The retrieved bytes are a code index with purpose summaries and links; they do not contain the Public Records Act's operative text or another partner-facing data obligation._
 

@@ -434,6 +434,27 @@
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f865a-18c6-7773-ad07-b345a94630c5",
       "hosts": []
+    },
+    {
+      "lane": "ds3-e",
+      "status": "done",
+      "worker": "codex gpt-5.6-sol@high",
+      "session_uuid": "019f86fb-597d-7d21-ba9f-ff16a3c5d9a4",
+      "hosts": []
+    },
+    {
+      "lane": "ds4-a",
+      "status": "active",
+      "worker": "codex gpt-5.6-sol@high",
+      "session_uuid": "019f8714-7c00-70c2-9b27-07872b8914da",
+      "hosts": []
+    },
+    {
+      "lane": "ds4-b",
+      "status": "active",
+      "worker": "codex gpt-5.6-sol@high",
+      "session_uuid": "019f8714-7f83-7610-ad47-3c9ef4fdccbc",
+      "hosts": []
     }
   ]
 }

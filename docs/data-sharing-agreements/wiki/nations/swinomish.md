@@ -5,7 +5,7 @@
 > **Non-discovery is not evidence of absence.** "Not found online" means only that this review did not locate a published copy — many instruments are held by custodians and unpublished by sovereign choice.
 
 - **Coverage status (DS-1 gate):** `found`
-- **Register entries:** 1 · **Cataloged documents:** 0 · **Extracted claims:** 0
+- **Register entries:** 1 · **Cataloged documents:** 1 · **Extracted claims:** 1
 
 ## Sources on record
 
@@ -13,7 +13,14 @@
 |---|---|---|---|
 | src-wac-008 | Swinomish Tribal Archive Research Request Form | `approved` | https://www.swinomish-nsn.gov/tribal-archive/page/research-request-form |
 
-## Cataloged instruments
+## Cataloged instruments (machine-extracted, DRAFT)
 
-_None yet. See coverage status above; searches for this Nation are logged in the provenance chain._
+### Research Request Form
+
+- instrument: `guidance` · legal status: `guidance-nonbinding` · review: `machine-extracted`
+- source: https://www.swinomish-nsn.gov/tribal-archive/page/research-request-form
+
+| Claim | Modal | Requirement | Conditions | Cite | TSDF |
+|---|---|---|---|---|---|
+| wac-008:c001 | `should-recommended` | The Swinomish Tribal Archive requests that all research requests be submitted through its online research-request form. | The page frames the form as a request, not a mandatory legal prerequisite, and ties it to protecting sensitive materials and providing efficient service. | Research Request Form page, opening paragraph | `` |
 
