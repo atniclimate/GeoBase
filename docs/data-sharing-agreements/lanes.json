@@ -1,4 +1,90 @@
 {
   "description": "Machine-readable lane registry — the tool validates: slice-filename lanes exist here; no host appears in two lanes with status 'active'. LANES.md is the human-readable companion (session UUIDs, checkpoints).",
-  "lanes": []
+  "lanes": [
+    {
+      "lane": "baseline",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85af-e4ad-70f3-866e-d0d4927e6b99",
+      "hosts": [
+        "nezperce.org",
+        "www.nezperce.org",
+        "tulaliptribes-nsn.gov",
+        "www.tulaliptribes-nsn.gov",
+        "doh.wa.gov",
+        "www.doh.wa.gov",
+        "leg.wa.gov",
+        "app.leg.wa.gov",
+        "lawfilesext.leg.wa.gov",
+        "hhs.gov",
+        "www.hhs.gov",
+        "aspe.hhs.gov",
+        "atnitribes.org",
+        "www.atnitribes.org",
+        "ncai.org",
+        "www.ncai.org",
+        "npaihb.org",
+        "www.npaihb.org",
+        "localcontexts.org",
+        "www.localcontexts.org",
+        "gida-global.org",
+        "www.gida-global.org",
+        "narf.org",
+        "www.narf.org",
+        "guides.lib.berkeley.edu",
+        "tribalresilienceactions.org",
+        "www.tribalresilienceactions.org",
+        "dpcpsi.nih.gov",
+        "bja.ojp.gov",
+        "github.com",
+        "congress.gov",
+        "www.congress.gov",
+        "ecfr.gov",
+        "www.ecfr.gov",
+        "nni.arizona.edu"
+      ]
+    },
+    {
+      "lane": "wa-coastal",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85b6-b6b2-7fc1-b8b2-00a22e4c1781",
+      "hosts": []
+    },
+    {
+      "lane": "wa-inland",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85b6-db81-79a0-86a5-47fe031283e5",
+      "hosts": []
+    },
+    {
+      "lane": "or",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85b7-0031-7d92-826f-d2d3d3dc05a3",
+      "hosts": []
+    },
+    {
+      "lane": "id",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85b7-2738-7e51-b557-c7f6b6d21541",
+      "hosts": []
+    },
+    {
+      "lane": "director",
+      "status": "active",
+      "worker": "claude/director",
+      "session_uuid": null,
+      "hosts": []
+    },
+    {
+      "lane": "institutional",
+      "status": "done",
+      "worker": "codex gpt-5.6-terra@medium",
+      "session_uuid": "019f85bd-8275-7fc1-a92d-179fb66ef3c8",
+      "hosts": []
+    }
+  ]
 }
