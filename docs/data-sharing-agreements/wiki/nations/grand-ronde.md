@@ -11,7 +11,7 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-bl-005 | Constitution of the Confederated Tribes of Grand Ronde | `candidate` | https://www.grandronde.org/services/tribal-government/constitution/ |
+| src-bl-005 | Constitution of the Confederated Tribes of Grand Ronde | `dead` | https://www.grandronde.org/services/tribal-government/constitution/ |
 | src-or-003 | Freedom of Information Ordinance | `approved` | https://www.grandronde.org/media/u4vhfiuy/2024-07-24-freedom-of-information-form-and-ordinance.pdf |
 
 ## Cataloged instruments (machine-extracted, DRAFT)

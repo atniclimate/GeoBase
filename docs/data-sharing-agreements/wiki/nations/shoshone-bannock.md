@@ -13,8 +13,8 @@
 |---|---|---|---|
 | src-bl-026 | Idaho water-rule prospective analysis on the Shoshone-Bannock Water Bank | `unresolved-baseline` | report://pnw-data-sovereignty-research.md#bl-026 |
 | src-bl-027 | Shoshone-Bannock Tribal TANF MOA / data-sharing items in Idaho transparency records | `unresolved-baseline` | report://pnw-data-sovereignty-research.md#bl-027 |
-| src-d2id-003 | Constitution and Bylaws | `candidate` | https://www.sbtribes.com/constitution-bylaws/ |
-| src-id-005 | Shoshone-Bannock Privacy Policy | `candidate` | https://www.sbtribes.com/shoshone-bannock-privacy-policy/ |
+| src-d2id-003 | Constitution and Bylaws | `approved` | https://www.sbtribes.com/constitution-bylaws/ |
+| src-id-005 | Shoshone-Bannock Privacy Policy | `approved` | https://www.sbtribes.com/shoshone-bannock-privacy-policy/ |
 | src-id-006 | The Law and Order Code — Ordinances | `candidate` | https://library.municode.com/tribes_and_tribal_nations/shoshone-bannock_tribes/ordinances/the_law_and_order_code |
 
 ## Cataloged instruments

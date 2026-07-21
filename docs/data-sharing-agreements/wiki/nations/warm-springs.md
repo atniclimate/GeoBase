@@ -11,9 +11,9 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-bl-003 | Constitution and By-Laws of the Confederated Tribes of Warm Springs Reservation of Oregon | `candidate` | https://warmsprings-nsn.gov/wp-content/uploads/2016/03/const.pdf |
+| src-bl-003 | Constitution and By-Laws of the Confederated Tribes of Warm Springs Reservation of Oregon | `approved` | https://warmsprings-nsn.gov/wp-content/uploads/2016/03/const.pdf |
 | src-bl-004 | Warm Springs Treaty and Documents page | `unresolved-baseline` | report://pnw-data-sovereignty-research.md#bl-004 |
-| src-or-006 | Tribal Code | `candidate` | https://warmsprings-nsn.gov/book/tribal-code/ |
+| src-or-006 | Tribal Code | `approved` | https://warmsprings-nsn.gov/book/tribal-code/ |
 
 ## Cataloged instruments
 

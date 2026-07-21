@@ -11,7 +11,7 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-bl-014 | Yakama Nation Water Code | `candidate` | https://yakama.com/programs/natural-resources/water-resources/water-code/ |
+| src-bl-014 | Yakama Nation Water Code | `dead` | https://yakama.com/programs/natural-resources/water-resources/water-code/ |
 | src-d2wai-001 | Title LX (60) — Water Code (2016 Edition V.3.2022) | `approved` | https://yakama.com/wp-content/uploads/2022/05/60-TITLE-LX-60-WATER-CODE-2016-Edition-V.3.2022.pdf |
 | src-wai-001 | Confederated Tribes and Bands of the Yakama Nation - Tribal Codes and Resolutions | `excluded-gated` | https://www.narf.org/nill/codes/confederatedyakama/index.html |
 

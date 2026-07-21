@@ -11,8 +11,8 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-bl-008 | Suquamish Tribe Constitution and Bylaws | `candidate` | https://suquamish.nsn.us/home/tribal-government/constitution-and-bylaws/ |
-| src-bl-009 | Suquamish Tribal Code table of contents and codification authority | `candidate` | https://suquamish.nsn.us/home/tribal-government/tribal-code/ |
+| src-bl-008 | Suquamish Tribe Constitution and Bylaws | `dead` | https://suquamish.nsn.us/home/tribal-government/constitution-and-bylaws/ |
+| src-bl-009 | Suquamish Tribal Code table of contents and codification authority | `dead` | https://suquamish.nsn.us/home/tribal-government/tribal-code/ |
 
 ## Cataloged instruments
 

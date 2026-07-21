@@ -11,7 +11,7 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-bl-010 | Nisqually Tribal Code page | `candidate` | https://www.nisqually-nsn.gov/government/tribal-code/ |
+| src-bl-010 | Nisqually Tribal Code page | `dead` | https://www.nisqually-nsn.gov/government/tribal-code/ |
 
 ## Cataloged instruments
 

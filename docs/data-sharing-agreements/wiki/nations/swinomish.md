@@ -11,7 +11,7 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-wac-008 | Swinomish Tribal Archive Research Request Form | `candidate` | https://www.swinomish-nsn.gov/tribal-archive/page/research-request-form |
+| src-wac-008 | Swinomish Tribal Archive Research Request Form | `approved` | https://www.swinomish-nsn.gov/tribal-archive/page/research-request-form |
 
 ## Cataloged instruments
 

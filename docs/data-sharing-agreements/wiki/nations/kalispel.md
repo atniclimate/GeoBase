@@ -12,7 +12,7 @@
 | Source | Title | Status | URL |
 |---|---|---|---|
 | src-wai-004 | Kalispel Tribe, Commerce sign memorandum of understanding to establish government-to-government relations | `approved` | https://www.commerce.wa.gov/kalispel-tribe-commerce-sign-memorandum-of-understanding-to-establish-government-to-government-relations/ |
-| src-wai-005 | 2024 Kalispel LIHEAP Agreement | `candidate` | https://liheapch.acf.gov/docs/2024/tribal-contracts/Signed%202024_Kalispel_LIHEAP_Agreement.pdf |
+| src-wai-005 | 2024 Kalispel LIHEAP Agreement | `approved` | https://liheapch.acf.gov/docs/2024/tribal-contracts/Signed%202024_Kalispel_LIHEAP_Agreement.pdf |
 
 ## Cataloged instruments (machine-extracted, DRAFT)
 

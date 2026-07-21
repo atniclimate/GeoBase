@@ -11,7 +11,7 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-d2id-001 | Kootenai Tribe of Idaho Law and Order Code — General | `candidate` | https://www.kootenai.org/files/1-General.pdf |
+| src-d2id-001 | Kootenai Tribe of Idaho Law and Order Code — General | `dead` | https://www.kootenai.org/files/1-General.pdf |
 
 ## Cataloged instruments
 

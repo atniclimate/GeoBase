@@ -11,7 +11,7 @@
 
 | Source | Title | Status | URL |
 |---|---|---|---|
-| src-bl-006 | Current Code of the Confederated Tribes of the Colville Reservation | `candidate` | https://www.colvilletribes.com/tribal-law-and-order-code |
+| src-bl-006 | Current Code of the Confederated Tribes of the Colville Reservation | `dead` | https://www.colvilletribes.com/tribal-law-and-order-code |
 | src-bl-007 | Colville enrollment and law page linking Constitution and amendments | `unresolved-baseline` | report://pnw-data-sovereignty-research.md#bl-007 |
 | src-d2wai-002 | Research Permit Application | `approved` | https://www.colvilletribes.com/s/ARC-Research-Permit-Application.pdf |
 | src-d2wai-003 | Research Regulation Ordinance Process | `approved` | https://static1.squarespace.com/static/56a24f7f841aba12ab7ecfa9/t/57bdeecb414fb5dbbcd97257/1472065227640/resregordpro.pdf |
