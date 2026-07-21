@@ -15,8 +15,8 @@
 # Statuses here mean ENGINEERING state ("gate green"), never acceptance.
 
 schema_version: 1
-last_trueup: "2026-07-16"
-verified_green_commit: "6d4a632"  # all 5 workflows green (CI, Render Gate, GeoPack Gate, License Audit, Pages)
+last_trueup: "2026-07-21"
+verified_green_commit: "6d4a632"  # all 5 workflows green (CI, Render Gate, GeoPack Gate, License Audit, Pages); 2026-07-21 trueup commit CI pending at write time — see handoff
 
 project:
   name: GeoBase
@@ -223,10 +223,28 @@ risks:
     mitigation: "AGENTS.md contract; director-level gate; reviews land only in ../_reviews/ (workspace review archive, outside this repo)"
     detection: "prompt review before every Codex invocation"
 
+# Owner-directed side lane (2026-07-21). Independent of PHASE-B sequencing;
+# does not touch the data spine or acceptance chain. Authority for its scope:
+# docs/data-sharing-agreements/PLAN.md; decisions in docs/DECISIONS.md
+# 2026-07-21 entry.
+side_projects:
+  - id: DSA-CORPUS
+    name: "Tribal data-sharing-agreement corpus + RSTEP Data Sovereignty Guidelines"
+    root: docs/data-sharing-agreements/
+    status: ds0_done_ready_to_launch_ds1
+    next_action: >
+      Launch DS-1 discovery: populate lanes.json/LANES.md, run
+      tools/lifecycle_selftest.py (must pass), then start the baseline lane
+      (normalize pnw-data-sovereignty-research.md into
+      sources/baseline-inventory.jsonl + register slice) and Nation-shard
+      lanes per prompts/codex-ds1-discovery.md. Gate:
+      `python tools/merge_validate.py coverage`.
+    denominator: "NWTEC-43 (owner-deferred ATNI roster; sources/atni-roster-status.json)"
+
 resume:
   current_phase: PHASE-B
   current_step: B4
-  next_microtask: TASK-B4.2-SPEC
+  next_microtask: TASK-B4.2-SPEC   # main line; the 2026-07-21 session opened side lane DSA-CORPUS — next session picks up DSA DS-1 launch per owner direction, then returns here
   blockers: []
   pending_decision_gates: []   # none block B4.2; DG-B5-RECEIPTS blocks B5 later
   required_reading:

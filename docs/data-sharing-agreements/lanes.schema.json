@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "geobase-dsa-lanes-registry-v1",
+  "title": "Machine lane registry (lanes.json)",
+  "type": "object",
+  "required": ["lanes"],
+  "properties": {
+    "description": { "type": "string" },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lane", "status", "hosts"],
+        "additionalProperties": true,
+        "properties": {
+          "lane": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,32}$" },
+          "status": { "enum": ["pending", "active", "merging", "done", "stalled", "aborted"] },
+          "hosts": { "type": "array", "items": { "type": "string" }, "description": "Lowercase hostnames this lane may contact; a network event's URL host must be listed here" },
+          "worker": { "type": "string" },
+          "session_uuid": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

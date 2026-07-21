@@ -851,3 +851,42 @@ open/unlock/recovery + `UNENCRYPTED-DEV` re-record) defers to B4. **T-B
 refuted** — the current global multiplicity-before-product-class order
 implements the ratified §5.2 independent-duplicate-coverage rule; it gets a
 regression pin, not a change.
+
+## 2026-07-21 — Data-sharing-agreements corpus subproject (DS lane; owner decisions + DS-0 infrastructure)
+
+**Subproject created (owner-directed):** `docs/data-sharing-agreements/` — a
+governed corpus of Tribes' publicly published data-governance instruments
+(DSAs, sovereignty plans, IP legislation, IRB/research policies) producing
+the RSTEP Tribal Data Sovereignty Guidelines, a GeoBase/TSDF adherence map,
+and a quick-reference wiki. Plan of record: its `PLAN.md` (phases DS-0…DS-6).
+
+**Governance basis (owner-ratified):** collection runs out-of-band from the
+GeoBase runtime TSDF gates under `COLLECTION-CHARTER.md` — a document-research
+regime (public-documents-only, terms-before-bytes, default-refuse,
+staging-as-a-state with human clearance for Nation-authored documents,
+append-only event-sourced provenance, versioned refetch, transitive
+takedown). It deliberately does NOT claim TSDF runtime equivalence; nothing
+enters the data spine.
+
+**Owner decisions (Patrick Freeland, 2026-07-21):**
+- **Ratification path:** DS-5 guidelines stay DRAFT until RSTEP Tribal
+  Advisory Board review → direct outreach to every Nation attributed in the
+  draft → Tribal IRB review where one exists → full ratification
+  (`guidelines/RATIFICATION-LEDGER.md`).
+- **Takedown channel:** reuben@atnitribes.org (ATNI Energy Program Manager,
+  RSTEP lead); takedown/reject/archive-auth events require human actors
+  (tool-enforced).
+- **Coverage denominator:** the 43-Nation NWTEC WA/OR/ID list
+  (`sources/nations.json`, `2026-07-21-nwtec-43`); ATNI-roster expansion
+  deferred to DS-6 (receipt in `sources/atni-roster-status.json`).
+
+**Adversarial review record:** three Codex-sol rounds in
+`../_reviews/geobase/` (2026-07-21 `dsa-corpus-plan.md`, `-rereview.md`,
+`-rereview2.md`; NO-GO → NO-GO → remediated) plus stop-gate escalations; all
+named blockers closed in `tools/merge_validate.py` (schema+integrity gate,
+fail-closed transitive takedown transaction) and proven by
+`tools/lifecycle_selftest.py` (23 checks incl. negative cases). Pre-DS-5
+carry-over: a `ds5` citation/ledger gate mode (recorded in PLAN.md).
+
+No acceptance status changed; B8 remains the sole acceptance act; main-line
+resume stays TASK-B4.2-SPEC.

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "geobase-dsa-baseline-item-v1",
+  "title": "Baseline inventory item (sources/baseline-inventory.jsonl)",
+  "description": "One row per item of the pnw-research report's four tables (scope: baseline-inventory.md). The coverage gate requires every baseline_id to be accounted for by exactly one register record.",
+  "type": "object",
+  "required": ["baseline_id", "title", "entity", "report_section"],
+  "additionalProperties": false,
+  "properties": {
+    "baseline_id": { "type": "string", "pattern": "^bl-[0-9]{3}$" },
+    "title": { "type": "string" },
+    "entity": { "type": "string" },
+    "report_section": { "enum": ["tribal-governance", "agreements-state", "federal", "academic-ngo"] },
+    "notes": { "type": ["string", "null"] }
+  }
+}

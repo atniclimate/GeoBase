@@ -1,0 +1,4 @@
+{
+  "description": "Machine-readable lane registry — the tool validates: slice-filename lanes exist here; no host appears in two lanes with status 'active'. LANES.md is the human-readable companion (session UUIDs, checkpoints).",
+  "lanes": []
+}

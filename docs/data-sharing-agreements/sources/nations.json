@@ -1,0 +1,265 @@
+{
+  "denominator_version": "2026-07-21-nwtec-43",
+  "source": "pnw-data-sovereignty-research.md coverage tables (NWTEC WA/OR/ID service region)",
+  "note": "atni_member null = unverified. Owner decision 2026-07-21: this subproject uses the NWTEC-43 denominator; ATNI-roster expansion deferred to DS-6 (receipt in atni-roster-status.json). Version-bump on any change.",
+  "nations": [
+    {
+      "nation_id": "yakama",
+      "name": "Confederated Tribes and Bands of the Yakama Nation",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "chehalis",
+      "name": "Confederated Tribes of the Chehalis Reservation",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "colville",
+      "name": "Confederated Tribes of the Colville Reservation",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "cowlitz",
+      "name": "Cowlitz Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "hoh",
+      "name": "Hoh Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "jamestown-sklallam",
+      "name": "Jamestown S'Klallam Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "kalispel",
+      "name": "Kalispel Tribe of Indians",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "lower-elwha-klallam",
+      "name": "Lower Elwha Klallam Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "lummi",
+      "name": "Lummi Nation",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "makah",
+      "name": "Makah Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "muckleshoot",
+      "name": "Muckleshoot Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "nisqually",
+      "name": "Nisqually Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "nooksack",
+      "name": "Nooksack Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "port-gamble-sklallam",
+      "name": "Port Gamble S'Klallam Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "puyallup",
+      "name": "Puyallup Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "quileute",
+      "name": "Quileute Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "quinault",
+      "name": "Quinault Indian Nation",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "samish",
+      "name": "Samish Indian Nation",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "sauk-suiattle",
+      "name": "Sauk-Suiattle Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "shoalwater-bay",
+      "name": "Shoalwater Bay Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "skokomish",
+      "name": "Skokomish Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "snoqualmie",
+      "name": "Snoqualmie Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "spokane",
+      "name": "Spokane Tribe of Indians",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "squaxin-island",
+      "name": "Squaxin Island Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "stillaguamish",
+      "name": "Stillaguamish Tribe of Indians",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "suquamish",
+      "name": "Suquamish Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "swinomish",
+      "name": "Swinomish Indian Tribal Community",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "tulalip",
+      "name": "Tulalip Tribes",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "upper-skagit",
+      "name": "Upper Skagit Indian Tribe",
+      "state": "WA",
+      "atni_member": null
+    },
+    {
+      "nation_id": "burns-paiute",
+      "name": "Burns Paiute Tribe",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "ctclusi",
+      "name": "Confederated Tribes of Coos, Lower Umpqua and Siuslaw Indians",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "grand-ronde",
+      "name": "Confederated Tribes of Grand Ronde",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "siletz",
+      "name": "Confederated Tribes of Siletz Indians",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "umatilla",
+      "name": "Confederated Tribes of the Umatilla Indian Reservation",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "warm-springs",
+      "name": "Confederated Tribes of Warm Springs Reservation of Oregon",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "cow-creek",
+      "name": "Cow Creek Band of Umpqua Tribe of Indians",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "coquille",
+      "name": "Coquille Indian Tribe",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "klamath",
+      "name": "Klamath Tribes",
+      "state": "OR",
+      "atni_member": null
+    },
+    {
+      "nation_id": "coeur-dalene",
+      "name": "Coeur d'Alene Tribe",
+      "state": "ID",
+      "atni_member": null
+    },
+    {
+      "nation_id": "kootenai-idaho",
+      "name": "Kootenai Tribe of Idaho",
+      "state": "ID",
+      "atni_member": null
+    },
+    {
+      "nation_id": "nez-perce",
+      "name": "Nez Perce Tribe",
+      "state": "ID",
+      "atni_member": null
+    },
+    {
+      "nation_id": "shoshone-bannock",
+      "name": "Shoshone-Bannock Tribes",
+      "state": "ID",
+      "atni_member": null
+    },
+    {
+      "nation_id": "shoshone-paiute",
+      "name": "Shoshone-Paiute Tribes",
+      "state": "ID",
+      "atni_member": null
+    }
+  ]
+}

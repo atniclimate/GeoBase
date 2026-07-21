@@ -1,0 +1,5 @@
+{
+  "description": "Coverage-denominator decision for this subproject. The coverage gate requires 'expanded' or 'deferred-by-owner' with a receipt.",
+  "status": "deferred-by-owner",
+  "receipt": "Owner decision (Patrick Freeland, 2026-07-21): this subproject uses the 43-Nation NWTEC WA/OR/ID denominator (sources/nations.json, version 2026-07-21-nwtec-43). ATNI-roster expansion moves to DS-6 maintenance / a future iteration."
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "geobase-dsa-coverage-record-v1",
+  "title": "Coverage-matrix record (sources/coverage-matrix.jsonl; one row per nations.json nation_id)",
+  "description": "DS-1 gate artifact. The tool enforces: exactly one row per denominator nation_id; any status other than not-yet-searched requires linked search/probe events in the access log.",
+  "type": "object",
+  "required": ["nation_id", "status", "search_events"],
+  "additionalProperties": false,
+  "properties": {
+    "nation_id": { "type": "string" },
+    "status": { "enum": ["found", "searched-not-found", "inaccessible", "excluded", "not-yet-searched"], "description": "'searched-not-found' is never evidence a Nation lacks a policy" },
+    "search_events": { "type": "array", "items": { "type": "string", "pattern": "^ev-[a-z0-9-]{8,64}$" }, "description": "search/probe event_ids evidencing the sweep (empty only for not-yet-searched)" },
+    "source_ids": { "type": ["array", "null"], "items": { "type": "string", "pattern": "^src-[a-z0-9-]{4,64}$" }, "description": "Register records found for this Nation" },
+    "notes": { "type": ["string", "null"] }
+  }
+}

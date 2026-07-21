@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "geobase-dsa-access-log-record-v3",
+  "title": "Access-log record v3 (append-only; one JSON object per line)",
+  "description": "Lanes write provenance/access-log.<lane>.jsonl; tools/merge_validate.py merges. All state transitions (clearance, review, register status, takedown) are events here — shared JSONL records are never edited. Corrections reference event_id.",
+  "type": "object",
+  "required": ["event_id", "ts", "actor", "lane", "action", "url"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "pattern": "^ev-[a-z0-9-]{8,64}$", "description": "Unique across all lanes: ev-<lane>-<seq>" },
+    "ts": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "actor": { "type": "string", "description": "'codex/<model>', 'claude-subagent/<role>', 'human/<name>'. State events reject/review/clear-of-nation-docs require human/* actors (tool-enforced)." },
+    "session_id": { "type": ["string", "null"] },
+    "lane": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,32}$" },
+    "action": { "enum": ["search", "probe", "discover", "fetch", "refetch", "clear", "restrict", "reject", "review", "parse", "summarize", "summary-attach", "register-status", "supersede", "exclude", "takedown", "archive-auth", "correction"] },
+    "url": { "type": "string", "description": "Requested URL, search-query descriptor, or repo-relative path for internal events" },
+    "final_url": { "type": ["string", "null"] },
+    "http_status": { "type": ["integer", "null"] },
+    "robots_ok": { "type": ["boolean", "null"] },
+    "robots_evidence": { "type": ["string", "null"] },
+    "user_agent": { "type": ["string", "null"] },
+    "terms_ok": { "type": ["boolean", "null"], "description": "Host terms permit this automated fetch (tool forbids fetch records with terms_ok/robots_ok false)" },
+    "terms_check": { "type": ["string", "null"], "description": "Decision basis for terms_ok" },
+    "sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$", "description": "Hash of stored bytes at local_path" },
+    "content_type": { "type": ["string", "null"] },
+    "size_bytes": { "type": ["integer", "null"] },
+    "local_path": { "type": ["string", "null"] },
+    "artifact_path": { "type": ["string", "null"], "description": "Derived artifact produced by this event (summary file for summarize/summary-attach)" },
+    "source_id": { "type": ["string", "null"], "pattern": "^src-[a-z0-9-]{4,64}$" },
+    "nation_id": { "type": ["string", "null"], "description": "Nation this search/probe sweep concerns (coverage-matrix rows may only cite events whose nation_id matches)" },
+    "doc_id": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
+    "content_version": { "type": ["string", "null"], "pattern": "^v[0-9]+-[a-f0-9]{8}$" },
+    "new_state": { "type": ["string", "null"], "description": "register-status: new register status. review: new review_state. supersede: superseding content_version." },
+    "parent_event": { "type": ["string", "null"], "pattern": "^ev-[a-z0-9-]{8,64}$" },
+    "notes": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "enum": ["fetch", "refetch"] } }, "required": ["action"] },
+      "then": { "required": ["http_status", "robots_ok", "robots_evidence", "user_agent", "terms_ok", "terms_check", "sha256", "content_type", "size_bytes", "local_path", "source_id", "doc_id", "content_version"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "probe" } }, "required": ["action"] },
+      "then": { "required": ["http_status", "robots_ok", "robots_evidence", "user_agent"] }
+    },
+    {
+      "if": { "properties": { "action": { "enum": ["clear", "restrict", "reject"] } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "content_version", "parent_event", "notes"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "review" } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "content_version", "new_state", "notes"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "parse" } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "content_version", "parent_event"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "summarize" } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "content_version", "parent_event", "artifact_path"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "summary-attach" } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "content_version", "artifact_path", "parent_event"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "register-status" } }, "required": ["action"] },
+      "then": { "required": ["source_id", "new_state", "notes"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "supersede" } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "content_version", "new_state", "parent_event"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "correction" } }, "required": ["action"] },
+      "then": { "required": ["parent_event", "notes"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "takedown" } }, "required": ["action"] },
+      "then": { "required": ["doc_id", "notes"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "exclude" } }, "required": ["action"] },
+      "then": { "required": ["source_id", "notes"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "archive-auth" } }, "required": ["action"] },
+      "then": { "required": ["source_id", "notes"] }
+    }
+  ]
+}

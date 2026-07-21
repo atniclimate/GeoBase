@@ -1,0 +1,6 @@
+# Corpus binaries never enter git (repo invariant 7 + charter §7).
+# Tracked record: manifest slices + merged manifest + schema + access log.
+corpus/*
+!corpus/MANIFEST*.jsonl
+!corpus/README.md
+!corpus/manifest.schema.json

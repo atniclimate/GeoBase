@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "geobase-dsa-register-record-v1",
+  "title": "Source-register record (one JSON object per line; lanes write register.<lane>.jsonl)",
+  "type": "object",
+  "required": ["source_id", "url", "title", "entity", "layer", "lane", "status", "discovered_via", "discover_event"],
+  "additionalProperties": false,
+  "properties": {
+    "source_id": { "type": "string", "pattern": "^src-[a-z0-9-]{4,64}$" },
+    "url": { "type": "string" },
+    "title": { "type": "string" },
+    "entity": { "type": "string", "description": "Exact issuing entity name" },
+    "nation_id": { "type": ["string", "null"], "description": "Canonical Nation slug from sources/NATIONS.md when Nation-specific" },
+    "layer": { "enum": ["baseline", "nation", "intertribal", "research-governance", "federal", "state", "academic", "ngo"] },
+    "lane": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,32}$" },
+    "status": { "enum": ["candidate", "approved", "fetched", "excluded-gated", "excluded-ambiguous", "excluded-terms", "dead", "unresolved-baseline", "duplicate"], "description": "Initial status only — later transitions are register-status events in the access log; the tool computes effective status. 'dead' = an observed 404/410 at a known-good URL; 'unresolved-baseline' = a baseline-report item whose official URL could not be re-located (NOT evidence a public URL ever existed; no archive fallback without human authorization)." },
+    "duplicate_of": { "type": ["string", "null"], "description": "source_id of canonical record when status=duplicate" },
+    "baseline_id": { "type": ["string", "null"], "pattern": "^bl-[0-9]{3}$", "description": "Stable ID of the pnw-research baseline inventory item this record verifies (see sources/baseline-inventory.md)" },
+    "official_source": { "type": ["boolean", "null"], "description": "Hosted by the issuing entity itself (vs aggregator/secondary)" },
+    "publication_intent": { "type": ["string", "null"], "description": "Evidence the document was deliberately published (e.g. 'linked from official codes page')" },
+    "language": { "type": ["string", "null"] },
+    "discovered_via": { "type": "string", "description": "Search query, referring page, or 'pnw-research-baseline'" },
+    "discover_event": { "type": "string", "pattern": "^ev-[a-z0-9-]{8,64}$", "description": "FK → access-log discover event" },
+    "search_date": { "type": ["string", "null"] },
+    "notes": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "pattern": "^excluded" } }, "required": ["status"] },
+      "then": { "required": ["notes"] }
+    },
+    {
+      "if": { "properties": { "status": { "const": "duplicate" } }, "required": ["status"] },
+      "then": { "required": ["duplicate_of"] }
+    }
+  ]
+}
