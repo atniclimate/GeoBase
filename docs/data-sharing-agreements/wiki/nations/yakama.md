@@ -1,0 +1,38 @@
+# Confederated Tribes and Bands of the Yakama Nation
+
+> **DRAFT — machine-assembled reference page.** Nothing here is confirmed by the Nation it concerns. Ratification path: RSTEP Tribal Advisory Board review, direct outreach to each Nation, Tribal IRB review where one exists (PLAN.md).
+>
+> **Non-discovery is not evidence of absence.** "Not found online" means only that this review did not locate a published copy — many instruments are held by custodians and unpublished by sovereign choice.
+
+- **Coverage status (DS-1 gate):** `found`
+- **Register entries:** 3 · **Cataloged documents:** 1 · **Extracted claims:** 11
+
+## Sources on record
+
+| Source | Title | Status | URL |
+|---|---|---|---|
+| src-bl-014 | Yakama Nation Water Code | `candidate` | https://yakama.com/programs/natural-resources/water-resources/water-code/ |
+| src-d2wai-001 | Title LX (60) — Water Code (2016 Edition V.3.2022) | `approved` | https://yakama.com/wp-content/uploads/2022/05/60-TITLE-LX-60-WATER-CODE-2016-Edition-V.3.2022.pdf |
+| src-wai-001 | Confederated Tribes and Bands of the Yakama Nation - Tribal Codes and Resolutions | `excluded-gated` | https://www.narf.org/nill/codes/confederatedyakama/index.html |
+
+## Cataloged instruments (machine-extracted, DRAFT)
+
+### Title LX (60) - Water Code (2016 Edition V.3.2022)
+
+- instrument: `tribal-code` · legal status: `enacted-current` · review: `machine-extracted`
+- source: https://yakama.com/wp-content/uploads/2022/05/60-TITLE-LX-60-WATER-CODE-2016-Edition-V.3.2022.pdf
+
+| Claim | Modal | Requirement | Conditions | Cite | TSDF |
+|---|---|---|---|---|---|
+| yakama-water-code:c001 | `may-permissive` | Consistent with existing Tribal Council and General Council resolutions, the Committee may exchange information and cooperate with other governmental agencies and recommend administrative agreements for appropriate purposes. | Information exchange and cooperation must be consistent with existing Tribal Council and General Council resolutions. | Section 60.03.03(g), code p. 9 / PDF p. 9 | `` |
+| yakama-water-code:c002 | `must-shall` | The Water Code Director and staff must collect and maintain statistical records concerning permit applications, issued permits, and other administrative activities under the Code. | Applies as an administrative duty under the Code. | Section 60.05.05(h), code p. 11 / PDF p. 11 | `` |
+| yakama-water-code:c003 | `must-shall` | The Director and staff must collect, organize, and catalogue existing Reservation-water information and studies from all sources, develop additional data as necessary, solicit comment and expert advice when appropriate, and prepare and disseminate public water-resource information and education materials. | Additional data development is limited to what is necessary for Code objectives; public comment and expert advice apply when appropriate. | Section 60.05.11, code p. 13 / PDF p. 13 | `` |
+| yakama-water-code:c004 | `must-shall` | On receiving a completed application for specified water-use permit classes, the Director must publish an online public notice soliciting comment and identifying the applicant, property, proposed use, Water Code Administration contact, and comment deadline. | Applies to Class 1, 2, 3, 5, 6, 7, 9, or 10 applications, subject to the exemptions in Section 60.09.21. | Section 60.09.15(a), code p. 19 / PDF p. 19 | `partially-mapped` |
+| yakama-water-code:c005 | `must-shall` | The Director must circulate all water-use permit applications to affected Yakama Nation programs and interested agencies, including the Bureau of Indian Affairs and Wapato Irrigation Project; the recipients must evaluate and comment within fourteen days, and the Director must record the information obtained through review and investigation. | The inter-disciplinary review path applies at the Director's discretion when a program objects. | Section 60.09.25(a)-(e), code pp. 21-22 / PDF pp. 21-22 | `` |
+| yakama-water-code:c006 | `must-shall` | Water-use permits must require every Reservation and off-Reservation trust-land diversion and withdrawal to be metered, measured, and reported to Water Code Administration on the timetable set by regulation or permit condition. | Applies through permit conditions to diversions and withdrawals within the Reservation or on off-Reservation trust land. | Section 60.09.27(b), code pp. 23-24 / PDF pp. 23-24 | `` |
+| yakama-water-code:c007 | `must-shall` | Well drillers must collect cuttings and provide information and access to Yakama Nation employees as required by the Director; property owners, agents, or contractors must also give advance written notice containing specified well, owner, use, start-date, and driller information. | Applies to well construction, alteration, or decommissioning; additional information is limited to what the Director requires. | Sections 60.13.01 and 60.13.03, code p. 27 / PDF p. 27 | `` |
+| yakama-water-code:c008 | `must-shall` | On receiving a completed hydraulic-permit application, the Director must publish an online public notice soliciting comment and identifying the applicant, property, proposed use, Water Code Administration contact, and comment deadline. | Applies to the hydraulic-permit process in Section 60.15.05; culturally sensitive area consultation remains internal to Yakama Nation programs. | Section 60.15.05(e), code p. 31 / PDF p. 31 | `partially-mapped` |
+| yakama-water-code:c009 | `must-shall` | For an appeal, the Committee must certify and transmit to the Tribal Council clerk the administrative record, including all supporting documents, minutes, transcripts, Director materials, and other decision-basis information, resolving relevance doubts in favor of inclusion. | Applies to Tribal Council review of a Committee final decision. | Section 60.21.07, code p. 41 / PDF p. 41 | `` |
+| yakama-water-code:c010 | `must-shall` | The Director and Committee must maintain files for applications, permits, and other Code activities; application and permit copies are open to public inspection and copying at the requester's expense, but the Code does not make other documents public and expressly excludes investigative, draft, internal, privileged, and legal-counsel communications. | Public access is confined to applications and permits; copying is at the requester's expense and the listed nonpublic categories are nonexclusive. | Section 60.29.05, code p. 53 / PDF p. 53 | `not-represented` |
+| yakama-water-code:c011 | `must-shall` | The Director and Committee must plan for all existing and future Reservation and off-Reservation trust-land diversions and withdrawals to be metered, measured, and reported to Water Code Administration according to a regulatory timetable. | This is a planning duty addressing existing and future diversions and withdrawals. | Section 60.29.01(c), code p. 53 / PDF p. 53 | `` |
+

@@ -56,3 +56,4 @@ NOTES.local.md
 !/data/fixtures/**
 .codex-runs/
 dist-desktop/
+HANDOFF.md

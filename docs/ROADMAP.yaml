@@ -15,8 +15,8 @@
 # Statuses here mean ENGINEERING state ("gate green"), never acceptance.
 
 schema_version: 1
-last_trueup: "2026-07-21"
-verified_green_commit: "d048fda"  # all 5 workflows green (CI, Render Gate, GeoPack Gate, License Audit, Pages), verified 2026-07-21
+last_trueup: "2026-07-21"  # second trueup same day (DSA DS-1..DS-3 executed)
+verified_green_commit: "6cab07d"  # all 5 workflows green verified 2026-07-21; later DSA docs-only commits through 936831e pushed same day (docs-only, workflows unaffected)
 
 project:
   name: GeoBase
@@ -231,20 +231,21 @@ side_projects:
   - id: DSA-CORPUS
     name: "Tribal data-sharing-agreement corpus + RSTEP Data Sovereignty Guidelines"
     root: docs/data-sharing-agreements/
-    status: ds0_done_ready_to_launch_ds1
+    status: ds3_preliminary_catalog_done
     next_action: >
-      Launch DS-1 discovery: populate lanes.json/LANES.md, run
-      tools/lifecycle_selftest.py (must pass), then start the baseline lane
-      (normalize pnw-data-sovereignty-research.md into
-      sources/baseline-inventory.jsonl + register slice) and Nation-shard
-      lanes per prompts/codex-ds1-discovery.md. Gate:
-      `python tools/merge_validate.py coverage`.
+      OWNER PRIORITY: per-Tribe information display + full download of all
+      remaining approved/candidate sources, then analysis. DS-1 gate PASSED,
+      DS-2 done (30 docs cleared+ratified), DS-3 preliminary catalog done
+      (30 records, 192 claims). Next session: /pickup then follow
+      docs/handoffs/CURRENT.md — round-3 fetches, DS-3 gate audit,
+      per-Nation page refresh (tools/nation_pages.py), DS-4 summaries.
+      KEEP IT SIMPLE: bias to direct delivery over new process.
     denominator: "NWTEC-43 (owner-deferred ATNI roster; sources/atni-roster-status.json)"
 
 resume:
   current_phase: PHASE-B
   current_step: B4
-  next_microtask: TASK-B4.2-SPEC   # main line; the 2026-07-21 session opened side lane DSA-CORPUS — next session picks up DSA DS-1 launch per owner direction, then returns here
+  next_microtask: TASK-B4.2-SPEC   # main line unchanged; DSA-CORPUS side lane through DS-3 done 2026-07-21 — owner priority is DSA per-Tribe display + full gathering (docs/handoffs/CURRENT.md), then return here
   blockers: []
   pending_decision_gates: []   # none block B4.2; DG-B5-RECEIPTS blocks B5 later
   required_reading:
