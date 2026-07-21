@@ -488,6 +488,22 @@ def cross_checks(ctx):
                     ctx.err(w, f"fetch_event {f} mismatch (event={ev.get(f)!r} manifest={r.get(f)!r})")
         if r.get("source_id") and r["source_id"] not in sources:
             ctx.err(w, f"source_id {r['source_id']} not in register")
+        # cross-kind redaction closure: a redacted fetch URL must be redacted
+        # on the manifest side too, and vice versa — an interrupted redaction
+        # that landed only one kind's renames must not validate clean
+        if ev is not None:
+            def _red(v):
+                return isinstance(v, str) and v.startswith("[REDACTED:")
+            log_red = _red(ev.get("url")) or _red(ev.get("final_url"))
+            man_red = _red(r.get("source_url")) or _red(r.get("final_url"))
+            if log_red and not man_red and (r.get("source_url") or r.get("final_url")):
+                ctx.err(w, f"partially-redacted record {(r.get('doc_id'), r.get('content_version'))}: "
+                        "fetch URL is redacted but the manifest retains the sensitive URL "
+                        "— re-run the redact transaction to complete it")
+            elif man_red and not log_red and (ev.get("url") or ev.get("final_url")):
+                ctx.err(w, f"partially-redacted record {(r.get('doc_id'), r.get('content_version'))}: "
+                        "manifest URL is redacted but the fetch event retains the sensitive URL "
+                        "— re-run the redact transaction to complete it")
         cv, sh = r.get("content_version"), r.get("sha256")
         if cv and sh and not cv.endswith(sh[:8]):
             ctx.err(w, "content_version hash suffix does not match sha256")

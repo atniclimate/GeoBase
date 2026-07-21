@@ -288,6 +288,28 @@ def main():
         check(r.returncode == 0, "idempotent redact re-run heals the partial state",
               r.stdout + r.stderr)
         expect(tmp, "validate", True, "post-heal state validates clean")
+
+        # crash on the manifest side: restore the original source_url in BOTH
+        # manifest copies (internally consistent, but the log URL is redacted)
+        # — the cross-kind rule must catch it and a re-run must heal it
+        for mpath in (man, tmp / "corpus" / "MANIFEST.jsonl"):
+            restored = []
+            for line in mpath.read_text(encoding="utf-8").splitlines():
+                rec = json.loads(line)
+                if rec.get("doc_id") == "example-research-code":
+                    rec["source_url"] = "https://example.org/policy.pdf"
+                restored.append(json.dumps(rec, sort_keys=True))
+            mpath.write_text("\n".join(restored) + "\n", encoding="utf-8")
+        expect(tmp, "validate", False,
+               "NEGATIVE: manifest-side interrupted redaction detected cross-kind")
+        r = run(tmp, "redact", "ev-test-0002", "url,notes,terms_check")
+        check(r.returncode == 0, "redact re-run heals the manifest side",
+              r.stdout + r.stderr)
+        man_texts2 = man.read_text(encoding="utf-8") + \
+            (tmp / "corpus" / "MANIFEST.jsonl").read_text(encoding="utf-8")
+        check("policy.pdf" not in man_texts2,
+              "sensitive URL gone from manifests after heal", man_texts2)
+        expect(tmp, "validate", True, "post-manifest-heal state validates clean")
         expect(tmp, "validate", True, "post-redaction state validates clean")
 
         # coverage: Nation-bound evidence required
