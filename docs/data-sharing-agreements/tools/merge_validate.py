@@ -808,15 +808,28 @@ def redact(ctx, event_id, fields):
             tmp.replace(path)
         return changed
 
+    def all_paths(kind):
+        """Merged file + every lane slice — redaction must leave no copy of
+        the sensitive value in any retained provenance file."""
+        d, stem, _ = (ctx.root / FILES[kind][0], FILES[kind][1], None)
+        paths = [ctx.data[kind]["merged_path"]]
+        if d.exists():
+            paths += [p for p in sorted(d.glob(f"{stem}.*.jsonl"))
+                      if p.name != f"{stem}.jsonl"]
+        return paths
+
     n = apply(ctx.data["log"]["merged_path"], {event_id: fields})
     if n == 0:
         print(f"ERROR: {event_id} not present in the MERGED log (merge slices first); "
               "slices are lane-owned — redact after merge")
         sys.exit(1)
+    for p in all_paths("log")[1:]:
+        n += apply(p, {event_id: fields})
     m = 0
     if (REDACT_URLISH & set(fields)) and target.get("action") in ("fetch", "refetch"):
         mf = [f for f in ("source_url", "final_url") if "url" in fields or f in fields]
-        m = apply(ctx.data["manifest"]["merged_path"], {doc_key: mf or ["source_url", "final_url"]})
+        for p in all_paths("manifest"):
+            m += apply(p, {doc_key: mf or ["source_url", "final_url"]})
     print(f"redacted {n} field(s) on {event_id} (+{m} manifest field(s)) — sentinel "
           f"{sentinel}; re-run validate to confirm closure")
 

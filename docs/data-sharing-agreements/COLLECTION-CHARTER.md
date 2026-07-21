@@ -161,9 +161,13 @@ reproducible source.
   `python tools/merge_validate.py redact <event_id> <fields>` — a
   director transaction that requires a prior human `correction` event as
   evidence, replaces the values with a `[REDACTED:<correction-id>]`
-  sentinel, and never touches fields that carry hash/FK closure
-  (plain correction events without the transaction only annotate — they
-  do not redact); (7) re-run `validate` to prove closure.
+  sentinel in the merged files AND every lane slice, and never touches
+  fields that carry hash/FK closure (plain correction events without the
+  transaction only annotate — they do not redact). Honest limit: tracked
+  provenance files have git history; redaction covers the working tree
+  and all future commits, and a history purge (`git filter-repo` +
+  force-push) is a separate maintainer act if a Nation requires full
+  erasure; (7) re-run `validate` to prove closure.
   This exact lifecycle is exercised by `tools/lifecycle_selftest.py`,
   which must pass before every phase launch.
 

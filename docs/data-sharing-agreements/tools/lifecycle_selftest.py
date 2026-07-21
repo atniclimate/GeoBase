@@ -266,6 +266,14 @@ def main():
         fetch_line = next(l for l in merged_log.splitlines() if '"ev-test-0002"' in l)
         check("policy.pdf" not in fetch_line and "[REDACTED:ev-test-0013]" in fetch_line,
               "sensitive URL physically gone from the retained fetch record", fetch_line)
+        slice_log = log.read_text(encoding="utf-8")
+        slice_line = next(l for l in slice_log.splitlines() if '"ev-test-0002"' in l)
+        check("policy.pdf" not in slice_line and "[REDACTED:ev-test-0013]" in slice_line,
+              "sensitive URL physically gone from the lane slice too", slice_line)
+        man_texts = man.read_text(encoding="utf-8") + \
+            (tmp / "corpus" / "MANIFEST.jsonl").read_text(encoding="utf-8")
+        check("policy.pdf" not in man_texts,
+              "sensitive URL gone from merged + slice manifests", man_texts)
         expect(tmp, "validate", True, "post-redaction state validates clean")
 
         # coverage: Nation-bound evidence required
