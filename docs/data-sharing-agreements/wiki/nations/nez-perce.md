@@ -80,6 +80,8 @@
 - instrument: `tribal-code` · legal status: `enacted-current` · review: `needs-human-review`
 - source: https://nezperce.org/wp-content/uploads/2024/07/TITLE-6-includes-Hemp-and-Gaming-Ordinance.pdf
 
+> **Director correction ev-director-0083** (authoritative reading; the catalog record is never edited): Stop-gate review finding (Codex, 2026-07-21): the record's currentness metadata overstates the source evidence. 'legal_status: enacted-current' and 'date_amended_through: 2023-09-26' rest on the Gaming Ordinance component's own amendment note (Resolution NP 23-482) — evidence about ONE ordinance within the compiled Title 6, not the whole compilation. Corrected reading: legal_status should be 'enacted-amended-check-version'; the compilation has no single title-wide amended-through date; 2023-09-26 is component-level (Gaming Ordinance only). Merged catalog records are never edited — this correction plus the review-state downgrade below are the record of the fix; DS-3 gate audit and owner review must apply the corrected reading.
+
 | Claim | Modal | Requirement | Conditions | Cite | TSDF |
 |---|---|---|---|---|---|
 | nez-perce-revised-code-title-6:c001 | `must-shall` | Official Nez Perce enrollment records must be maintained by the Bureau of Indian Affairs as directed by official NPTEC actions. | Applies to administration of the Tribe's official enrollment records. | Section 6-1-7(a), Enrollment Ordinance p. 6 / PDF p. 15 | `` |

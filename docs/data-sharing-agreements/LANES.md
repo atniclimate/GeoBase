@@ -26,6 +26,10 @@ this is the global per-host throttle mechanism.
 
 | ds3-d | DS-3 | codex gpt-5.6-sol@high | catalog 16 round-3 non-Nation cleared docs + 2 corrective (r3-004 ISDEAA ch.46, r3-005 EO 13175) | `catalog/catalog.ds3-d.jsonl`, `provenance/access-log.ds3-d.jsonl`, `reviews/lane-reports/ds3-d-2026-07-21.md` | `019f865a-18c6-7773-ad07-b345a94630c5` | done | 2026-07-21: 18 records / 86 claims; honest content-mismatch findings bl-028 (forestry ch.33, not ISDEAA) + bl-030 (1998 disposition page lacks EO 13175 text) → corrective refetch r3-004/r3-005 cataloged same session. Merged; validate clean. |
 
+| ds3-e | DS-3 | codex gpt-5.6-sol@high | catalog final 16 round-3 docs (8 Nation-authored ratified + 8 flag-cleared, handling rules binding) | ds3-e slices + report | `019f86fb-597d-7d21-ba9f-ff16a3c5d9a4` | done | 2026-07-21: 16 records / 81 claims, 9 none_reason, leak check clean. Catalog complete 64 rec / 359 claims. |
+| ds4-a | DS-4 | codex gpt-5.6-sol@high | 30 summaries (ds3-a/b/c docs) + themes consent-fpic, ownership-control, review-board, redisclosure-confidentiality | summaries/, wiki drafts, access-log.ds4-a.jsonl | `019f8714-7c00-70c2-9b27-07872b8914da` | done | 2026-07-21: 30 summaries / 192 claims restated; 4 whole-catalog theme drafts; corrections applied. |
+| ds4-b | DS-4 | codex gpt-5.6-sol@high | 34 summaries (ds3-d/e docs) + themes publication-approval, benefit-sharing-data-return, enforcement-jurisdiction, ip-tk-protection | summaries/, wiki drafts, access-log.ds4-b.jsonl | `019f8714-7f83-7610-ad47-3c9ef4fdccbc` | done | 2026-07-21: 34 summaries / 167 claims restated; 4 theme drafts, exact claim closure. Drafts promoted to wiki/<theme>.md by director. |
+
 Statuses: `pending` → `active` → `merging` → `done` | `stalled` | `aborted`.
 Stalled lanes (no progress across a session) are recovered by resuming the
 recorded session or re-issuing the lane with the same slice files — the

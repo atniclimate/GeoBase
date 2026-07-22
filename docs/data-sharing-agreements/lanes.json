@@ -444,14 +444,14 @@
     },
     {
       "lane": "ds4-a",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f8714-7c00-70c2-9b27-07872b8914da",
       "hosts": []
     },
     {
       "lane": "ds4-b",
-      "status": "active",
+      "status": "done",
       "worker": "codex gpt-5.6-sol@high",
       "session_uuid": "019f8714-7f83-7610-ad47-3c9ef4fdccbc",
       "hosts": []

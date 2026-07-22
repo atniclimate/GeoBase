@@ -53,6 +53,11 @@ def main():
     for e in sorted((e for e in log if e.get("action") == "review"),
                     key=lambda x: x["ts"]):
         eff_review[(e.get("doc_id"), e.get("content_version"))] = e.get("new_state")
+    # director corrections are authoritative readings; pages must surface them
+    corrections = defaultdict(list)
+    for e in sorted((e for e in log if e.get("action") == "correction"
+                     and e.get("doc_id")), key=lambda x: x["ts"]):
+        corrections[(e.get("doc_id"), e.get("content_version"))].append(e)
     cat_by_nation = defaultdict(list)
     for c in catalog:
         c["_review"] = eff_review.get((c["doc_id"], c.get("content_version")),
@@ -87,6 +92,16 @@ def main():
                         f"`{c.get('legal_status')}` · review: `{c.get('_review')}`\n"
                         f"- source: {c.get('source_url','')}\n")
                 lines.append(head)
+                corr = corrections.get((c["doc_id"], c.get("content_version")), [])
+                corrected_ids = set()
+                for e in corr:
+                    note = (e.get("notes") or "").replace("|", "\\|")
+                    lines.append(f"> **Director correction {e['event_id']}** "
+                                 f"(authoritative reading; the catalog record is "
+                                 f"never edited): {note}\n")
+                    for k in (c.get("requirements") or {}).get("claims") or []:
+                        if k.get("claim_id") and k["claim_id"] in (e.get("notes") or ""):
+                            corrected_ids.add(k["claim_id"])
                 cl = (c.get("requirements") or {}).get("claims") or []
                 if cl:
                     lines += ["| Claim | Modal | Requirement | Conditions | Cite | TSDF |",
@@ -94,7 +109,10 @@ def main():
                     for k in cl:
                         req = (k.get("claim") or "").replace("|", "\\|")
                         cond = (k.get("conditions") or "").replace("|", "\\|")
-                        lines.append(f"| {k.get('claim_id')} | `{k.get('modal')}` | {req} "
+                        modal = f"`{k.get('modal')}`"
+                        if k.get("claim_id") in corrected_ids:
+                            modal += " ⚠ superseded — see correction above"
+                        lines.append(f"| {k.get('claim_id')} | {modal} | {req} "
                                      f"| {cond} | {k.get('cite','')} | "
                                      f"`{k.get('tsdf_outcome','')}` |")
                     lines.append("")
