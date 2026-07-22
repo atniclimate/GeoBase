@@ -66,16 +66,26 @@ def main():
                              if c.get("legal_status")},
                             key=len, reverse=True)
 
-    def corrected_value(notes, current, tokens, word_map=None):
-        """Last enum token quoted/named in a correction note that differs
-        from the recorded value = the authoritative corrected reading."""
+    def corrected_segment(notes):
+        """Machine-applied supersession convention: a correction event only
+        changes a displayed value when its notes contain an explicit
+        'Corrected reading' marker; enum values are read ONLY from the text
+        after that marker. Mentions elsewhere in the note (context, rejected
+        readings, 'no correction issued for ...') never supersede anything."""
+        import re
+        m = list(re.finditer(r"corrected reading[:\s]", notes, re.IGNORECASE))
+        return notes[m[-1].end():] if m else None
+
+    def corrected_value(segment, current, tokens, word_map=None):
+        if not segment:
+            return None
         found = None
         for tok in tokens:
-            if tok != current and f"'{tok}'" in notes or tok != current and f"`{tok}`" in notes:
+            if tok != current and (f"'{tok}'" in segment or f"`{tok}`" in segment):
                 found = tok
         if not found and word_map:
             import re
-            for m in re.finditer(r"(?:modal|reading)\s+is\s+'?([a-z-]+)'?", notes):
+            for m in re.finditer(r"(?:modal|reading)\s+is\s+'?([a-z-]+)'?", segment):
                 mapped = word_map.get(m.group(1), m.group(1))
                 if mapped in tokens and mapped != current:
                     found = mapped
@@ -116,15 +126,21 @@ def main():
                 corrected_claims = {}
                 for e in corr:
                     notes = e.get("notes") or ""
-                    ls = corrected_value(notes, c.get("legal_status"), legal_statuses)
+                    seg = corrected_segment(notes)
+                    if seg is None:
+                        continue  # narrative-only correction: blockquote only
+                    ls = corrected_value(seg, c.get("legal_status"), legal_statuses)
                     if ls:
                         ls_now, ls_from = ls, e["event_id"]
                     for k in (c.get("requirements") or {}).get("claims") or []:
                         cid = k.get("claim_id")
+                        # full claim_id required, and only when the event
+                        # actually declares a corrected reading
                         if cid and cid in notes:
-                            m = corrected_value(notes, k.get("modal"), MODALS,
+                            m = corrected_value(seg, k.get("modal"), MODALS,
                                                 MODAL_WORDS)
-                            corrected_claims[cid] = (m, e["event_id"])
+                            if m:
+                                corrected_claims[cid] = (m, e["event_id"])
                 if ls_from:
                     ls_cell = (f"~~`{c.get('legal_status')}`~~ **`{ls_now}`** "
                                f"(corrected by {ls_from})")
