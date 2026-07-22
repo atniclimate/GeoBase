@@ -68,13 +68,15 @@ def main():
 
     def corrected_segment(notes):
         """Machine-applied supersession convention: a correction event only
-        changes a displayed value when its notes contain an explicit
-        'Corrected reading' marker; enum values are read ONLY from the text
-        after that marker. Mentions elsewhere in the note (context, rejected
-        readings, 'no correction issued for ...') never supersede anything."""
-        import re
-        m = list(re.finditer(r"corrected reading[:\s]", notes, re.IGNORECASE))
-        return notes[m[-1].end():] if m else None
+        changes a displayed value when its notes contain the literal marker
+        'Corrected reading:' (capitalized, colon — the form ev-director-0083
+        and ev-director-0140 use); enum values are read ONLY from the text
+        after the last marker. The phrase appearing in ordinary prose (e.g.
+        'must present the corrected reading') is not a marker and never
+        supersedes anything, nor do claim-id mentions elsewhere in a note
+        ('no correction issued for ...')."""
+        i = notes.rfind("Corrected reading:")
+        return notes[i + len("Corrected reading:"):] if i != -1 else None
 
     def corrected_value(segment, current, tokens, word_map=None):
         if not segment:
