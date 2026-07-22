@@ -77,7 +77,7 @@
 
 ### Nez Perce Tribe Revised Code - Title 6: Intergovernmental Rules and Regulations
 
-- instrument: `tribal-code` · legal status: `enacted-current` · review: `needs-human-review`
+- instrument: `tribal-code` · legal status: ~~`enacted-current`~~ **`enacted-amended-check-version`** (corrected by ev-director-0083) · review: `needs-human-review`
 - source: https://nezperce.org/wp-content/uploads/2024/07/TITLE-6-includes-Hemp-and-Gaming-Ordinance.pdf
 
 > **Director correction ev-director-0083** (authoritative reading; the catalog record is never edited): Stop-gate review finding (Codex, 2026-07-21): the record's currentness metadata overstates the source evidence. 'legal_status: enacted-current' and 'date_amended_through: 2023-09-26' rest on the Gaming Ordinance component's own amendment note (Resolution NP 23-482) — evidence about ONE ordinance within the compiled Title 6, not the whole compilation. Corrected reading: legal_status should be 'enacted-amended-check-version'; the compilation has no single title-wide amended-through date; 2023-09-26 is component-level (Gaming Ordinance only). Merged catalog records are never edited — this correction plus the review-state downgrade below are the record of the fix; DS-3 gate audit and owner review must apply the corrected reading.

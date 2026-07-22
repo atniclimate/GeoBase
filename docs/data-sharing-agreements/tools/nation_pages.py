@@ -58,6 +58,28 @@ def main():
     for e in sorted((e for e in log if e.get("action") == "correction"
                      and e.get("doc_id")), key=lambda x: x["ts"]):
         corrections[(e.get("doc_id"), e.get("content_version"))].append(e)
+
+    MODALS = ["must-shall", "should-recommended", "may-permissive", "descriptive"]
+    MODAL_WORDS = {"must": "must-shall", "shall": "must-shall",
+                   "may": "may-permissive", "should": "should-recommended"}
+    legal_statuses = sorted({c.get("legal_status") for c in catalog
+                             if c.get("legal_status")},
+                            key=len, reverse=True)
+
+    def corrected_value(notes, current, tokens, word_map=None):
+        """Last enum token quoted/named in a correction note that differs
+        from the recorded value = the authoritative corrected reading."""
+        found = None
+        for tok in tokens:
+            if tok != current and f"'{tok}'" in notes or tok != current and f"`{tok}`" in notes:
+                found = tok
+        if not found and word_map:
+            import re
+            for m in re.finditer(r"(?:modal|reading)\s+is\s+'?([a-z-]+)'?", notes):
+                mapped = word_map.get(m.group(1), m.group(1))
+                if mapped in tokens and mapped != current:
+                    found = mapped
+        return found
     cat_by_nation = defaultdict(list)
     for c in catalog:
         c["_review"] = eff_review.get((c["doc_id"], c.get("content_version")),
@@ -87,21 +109,38 @@ def main():
         if cats:
             lines += ["## Cataloged instruments (machine-extracted, DRAFT)", ""]
             for c in sorted(cats, key=lambda x: x["doc_id"]):
+                corr = corrections.get((c["doc_id"], c.get("content_version")), [])
+                # record-level corrected legal_status (last correction wins)
+                ls_now, ls_from = c.get("legal_status"), None
+                # claim-level corrected modals: claim_id -> (modal, event_id)
+                corrected_modals = {}
+                for e in corr:
+                    notes = e.get("notes") or ""
+                    ls = corrected_value(notes, c.get("legal_status"), legal_statuses)
+                    if ls:
+                        ls_now, ls_from = ls, e["event_id"]
+                    for k in (c.get("requirements") or {}).get("claims") or []:
+                        cid = k.get("claim_id")
+                        if cid and cid in notes:
+                            m = corrected_value(notes, k.get("modal"), MODALS,
+                                                MODAL_WORDS)
+                            if m:
+                                corrected_modals[cid] = (m, e["event_id"])
+                if ls_from:
+                    ls_cell = (f"~~`{c.get('legal_status')}`~~ **`{ls_now}`** "
+                               f"(corrected by {ls_from})")
+                else:
+                    ls_cell = f"`{c.get('legal_status')}`"
                 head = (f"### {c.get('title', c['doc_id'])}\n\n"
                         f"- instrument: `{c.get('instrument_type')}` · legal status: "
-                        f"`{c.get('legal_status')}` · review: `{c.get('_review')}`\n"
+                        f"{ls_cell} · review: `{c.get('_review')}`\n"
                         f"- source: {c.get('source_url','')}\n")
                 lines.append(head)
-                corr = corrections.get((c["doc_id"], c.get("content_version")), [])
-                corrected_ids = set()
                 for e in corr:
                     note = (e.get("notes") or "").replace("|", "\\|")
                     lines.append(f"> **Director correction {e['event_id']}** "
                                  f"(authoritative reading; the catalog record is "
                                  f"never edited): {note}\n")
-                    for k in (c.get("requirements") or {}).get("claims") or []:
-                        if k.get("claim_id") and k["claim_id"] in (e.get("notes") or ""):
-                            corrected_ids.add(k["claim_id"])
                 cl = (c.get("requirements") or {}).get("claims") or []
                 if cl:
                     lines += ["| Claim | Modal | Requirement | Conditions | Cite | TSDF |",
@@ -109,10 +148,13 @@ def main():
                     for k in cl:
                         req = (k.get("claim") or "").replace("|", "\\|")
                         cond = (k.get("conditions") or "").replace("|", "\\|")
-                        modal = f"`{k.get('modal')}`"
-                        if k.get("claim_id") in corrected_ids:
-                            modal += " ⚠ superseded — see correction above"
-                        lines.append(f"| {k.get('claim_id')} | {modal} | {req} "
+                        cid = k.get("claim_id")
+                        if cid in corrected_modals:
+                            m, ev = corrected_modals[cid]
+                            modal = f"~~`{k.get('modal')}`~~ **`{m}`** (corrected by {ev})"
+                        else:
+                            modal = f"`{k.get('modal')}`"
+                        lines.append(f"| {cid} | {modal} | {req} "
                                      f"| {cond} | {k.get('cite','')} | "
                                      f"`{k.get('tsdf_outcome','')}` |")
                     lines.append("")
