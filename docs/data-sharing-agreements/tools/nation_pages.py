@@ -112,8 +112,8 @@ def main():
                 corr = corrections.get((c["doc_id"], c.get("content_version")), [])
                 # record-level corrected legal_status (last correction wins)
                 ls_now, ls_from = c.get("legal_status"), None
-                # claim-level corrected modals: claim_id -> (modal, event_id)
-                corrected_modals = {}
+                # claim-level corrections: claim_id -> (corrected_modal|None, event_id)
+                corrected_claims = {}
                 for e in corr:
                     notes = e.get("notes") or ""
                     ls = corrected_value(notes, c.get("legal_status"), legal_statuses)
@@ -124,8 +124,7 @@ def main():
                         if cid and cid in notes:
                             m = corrected_value(notes, k.get("modal"), MODALS,
                                                 MODAL_WORDS)
-                            if m:
-                                corrected_modals[cid] = (m, e["event_id"])
+                            corrected_claims[cid] = (m, e["event_id"])
                 if ls_from:
                     ls_cell = (f"~~`{c.get('legal_status')}`~~ **`{ls_now}`** "
                                f"(corrected by {ls_from})")
@@ -149,9 +148,17 @@ def main():
                         req = (k.get("claim") or "").replace("|", "\\|")
                         cond = (k.get("conditions") or "").replace("|", "\\|")
                         cid = k.get("claim_id")
-                        if cid in corrected_modals:
-                            m, ev = corrected_modals[cid]
-                            modal = f"~~`{k.get('modal')}`~~ **`{m}`** (corrected by {ev})"
+                        if cid in corrected_claims:
+                            m, ev = corrected_claims[cid]
+                            modal = (f"~~`{k.get('modal')}`~~ **`{m}`** "
+                                     f"(corrected by {ev})" if m else
+                                     f"~~`{k.get('modal')}`~~ (superseded by {ev})")
+                            # the recorded prose expresses the superseded
+                            # reading; the correction above is authoritative
+                            req = (f"~~{req}~~ **superseded — corrected "
+                                   f"reading in {ev} above**")
+                            if cond:
+                                cond = f"~~{cond}~~"
                         else:
                             modal = f"`{k.get('modal')}`"
                         lines.append(f"| {cid} | {modal} | {req} "
