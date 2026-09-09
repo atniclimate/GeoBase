@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' geobase: data: blob:; script-src 'self' geobase: 'wasm-unsafe-eval'; worker-src 'self' geobase: blob:; style-src 'self' geobase: 'unsafe-inline'; img-src 'self' geobase: data: blob:; font-src 'self' geobase: data:; connect-src 'self' geobase:"
+    />
+    <title>ATNI-GeoBase development workspace</title>
+  </head>
+  <body>
+    <div id="governance-banner" role="alert">
+      DEVELOPMENT BUILD - SOVEREIGNTY CONTROLS NOT ENFORCED
+    </div>
+
+    <div class="application-shell">
+      <header class="workspace-header">
+        <div class="brand-block">
+          <p class="eyebrow">Local siting workspace</p>
+          <h1>ATNI-GeoBase</h1>
+          <button id="rstep-mode" type="button" aria-pressed="false">RSTEP wind / solar</button>
+        </div>
+        <dl class="project-summary" aria-label="Active project metadata">
+          <div>
+            <dt>Project</dt>
+            <dd id="project-name">Untitled synthetic workspace</dd>
+          </div>
+          <div>
+            <dt>Scenario</dt>
+            <dd id="scenario-name">Synthetic baseline</dd>
+          </div>
+          <div>
+            <dt>Analysis CRS</dt>
+            <dd id="analysis-crs" title="EPSG:4326 native coordinates; topology-only intersections; no metric area, distance, or buffer calculation">
+              EPSG:4326 • topology-only
+            </dd>
+          </div>
+          <div>
+            <dt>Governance</dt>
+            <dd><span class="status-dot status-warning"></span><span id="governance-mode">development_bypass</span></dd>
+          </div>
+        </dl>
+        <p class="rstep-only" id="rstep-header-summary">RSTEP • local screening workspace • EPSG:5070 analysis<br>Coverage and rule applicability remain explicit.</p>
+        <div class="file-workflow">
+          <nav class="file-actions" aria-label="Project and export actions">
+            <button id="new-project" type="button">New / clear</button>
+            <button id="open-project" type="button">Open project…</button>
+            <button id="save-project" class="button-primary" type="button">Save project…</button>
+            <button id="export-geojson" type="button" disabled>Export all result polygons…</button>
+            <button id="import-geojson" type="button">Re-import GeoJSON…</button>
+          </nav>
+        </div>
+      </header>
+
+      <main class="workspace-grid">
+        <aside class="panel layer-panel" aria-labelledby="layers-heading">
+          <section id="rstep-controls" class="rstep-only" aria-label="RSTEP inputs"></section>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Inputs</p>
+              <h2 id="layers-heading">Layer registry</h2>
+            </div>
+            <span id="layer-count" class="count-badge">0</span>
+          </div>
+
+          <button id="load-fixtures" class="button-primary full-width" type="button">
+            Load bundled synthetic layers
+          </button>
+          <button id="load-wa-tribal-context" class="button-accent full-width" type="button">
+            Open WA / Tribal context…
+          </button>
+          <button id="open-dem-package" class="button-accent full-width" type="button">
+            Open local DEM package…
+          </button>
+          <button id="cancel-dem-load" class="full-width" type="button" hidden>Cancel DEM loading</button>
+          <button id="validate-error" class="button-subtle full-width" type="button">
+            Check missing-CRS sample
+          </button>
+
+          <p id="file-workflow-warning" class="file-workflow-warning" role="note">
+            Documents may be cloud-synced. Choose a local, non-cloud folder for project and GeoJSON files.
+          </p>
+
+          <div class="truth-card" role="note">
+            <strong>Synthetic demonstration inputs</strong>
+            <p>
+              Hand-authored, non-jurisdictional polygons for software verification only. They are not
+              measured resource data, legal boundaries, ownership, suitability, or an endorsement.
+            </p>
+          </div>
+
+          <section id="dem-section" class="dem-section" aria-labelledby="dem-heading" hidden>
+            <h3 id="dem-heading">Local elevation package</h3>
+            <p id="dem-kind" class="dem-kind"></p>
+            <dl id="dem-metadata" class="dem-metadata"></dl>
+            <details><summary>Complete source and recipe metadata</summary><pre id="dem-provenance"></pre></details>
+          </section>
+
+          <div id="layer-list" class="layer-list" aria-live="polite">
+            <div class="empty-card" data-testid="layers-empty">
+              <strong>No layers loaded</strong>
+              <p>Load the three bundled fixtures to exercise the real CRS and GeoJSON adapter.</p>
+            </div>
+          </div>
+
+          <section id="wa-context-section" class="wa-context-section" aria-labelledby="wa-context-heading">
+            <div class="section-heading">
+              <h3 id="wa-context-heading">WA / Tribal context</h3>
+              <span id="wa-context-summary" class="muted">Not loaded</span>
+            </div>
+
+            <fieldset id="tribal-legend" class="tribal-legend">
+              <legend class="visually-hidden">WA and Tribal map categories</legend>
+              <label data-kind="wa-state">
+                <input type="checkbox" data-tribal-visibility="wa_state" checked disabled />
+                <span><strong>Washington State</strong><small>2025 Census state exterior</small></span>
+              </label>
+              <label data-kind="wa-overflow">
+                <input type="checkbox" data-tribal-visibility="wa_technical_buffer" checked disabled />
+                <span><strong>100 m technical overflow</strong><small>Exterior data-edge strip</small></span>
+              </label>
+              <label data-kind="reservation">
+                <input type="checkbox" data-tribal-visibility="federal_reservation_exterior" checked disabled />
+                <span><strong>Federal reservation exterior</strong><small>Solid fill</small></span>
+              </label>
+              <label data-kind="trust">
+                <input type="checkbox" data-tribal-visibility="off_reservation_trust_land" checked disabled />
+                <span><strong>Off-reservation trust land</strong><small>Horizontal stripe</small></span>
+              </label>
+              <label data-kind="tdsa">
+                <input type="checkbox" data-tribal-visibility="tdsa_statistical_area" checked disabled />
+                <span><strong>TDSA / statistical area</strong><small>Vertical stripe; not legal land</small></span>
+              </label>
+              <label data-kind="border-context">
+                <input type="checkbox" data-tribal-visibility="border_context" checked disabled />
+                <span><strong>Border context</strong><small>Outside the GOIA 29 denominator</small></span>
+              </label>
+              <div class="coverage-gap-legend" data-kind="gap">
+                <strong>Explicit component gaps</strong>
+                <small>
+                  BIA LAR, tract/parcel status, treaty, ceded-land, Tribe-approved U&amp;A,
+                  and agreement-specific co-management remain separately deferred or unsourced.
+                </small>
+              </div>
+            </fieldset>
+
+            <p id="technical-buffer-disclaimer" class="technical-buffer-disclaimer">
+              No WA / Tribal package loaded. The technical overflow is never a legal boundary.
+            </p>
+
+            <div id="wa-source-attribution" class="wa-source-attribution" role="note">
+              Source custody, vintage, attribution, limitations, and classification will appear after local validation.
+            </div>
+          </section>
+
+          <section class="scenario-section" aria-labelledby="scenario-heading">
+            <p class="eyebrow">Deterministic rules</p>
+            <h2 id="scenario-heading">Scenario</h2>
+            <label class="rule-toggle" for="hard-enabled">
+              <input id="hard-enabled" type="checkbox" checked disabled />
+              <span>
+                <strong>Hard exclusion</strong>
+                <small>Intersecting cells are excluded.</small>
+              </span>
+            </label>
+            <label class="rule-toggle" for="soft-enabled">
+              <input id="soft-enabled" type="checkbox" checked disabled />
+              <span>
+                <strong>Soft penalty</strong>
+                <small>Intersecting cells receive a visible penalty; they are not excluded.</small>
+              </span>
+            </label>
+            <button id="run-analysis" class="button-accent full-width" type="button" disabled>
+              Run transparent analysis
+            </button>
+          </section>
+        </aside>
+
+        <section class="map-column" aria-labelledby="map-heading">
+          <h2 id="map-heading" class="visually-hidden">Cesium map</h2>
+          <div id="cesium-container" role="application" aria-label="Interactive Cesium globe showing a synthetic Washington-region fixture"></div>
+
+          <div class="map-topbar">
+            <span class="map-chip">
+              <span class="status-dot status-success"></span>
+              Cesium • bundled runtime
+            </span>
+            <span id="terrain-chip" class="map-chip">Terrain on • synthetic / not measured</span>
+            <span class="map-chip rstep-only">RSTEP • source vectors on ellipsoid • no measured terrain</span>
+          </div>
+
+          <fieldset class="map-controls">
+            <legend class="visually-hidden">Map controls</legend>
+            <label class="terrain-toggle" for="terrain-enabled">
+              <input id="terrain-enabled" type="checkbox" checked />
+              <span id="terrain-toggle-label">Procedural terrain</span>
+            </label>
+            <button id="reset-camera" type="button">Reset fixture view</button>
+            <button id="dem-coverage-view" type="button" hidden>Coverage from above</button>
+            <button id="start-drawing" class="button-accent" type="button" disabled>Draw candidate</button>
+            <button id="finish-drawing" class="button-primary" type="button" disabled>Finish polygon</button>
+            <button id="cancel-drawing" type="button" disabled>Cancel</button>
+          </fieldset>
+
+          <div id="draw-instruction" class="draw-instruction" hidden>
+            Click at least three locations on the globe, then choose <strong>Finish polygon</strong>.
+            <span id="draft-count">0 vertices</span>
+          </div>
+
+          <div class="map-attribution" role="note" aria-label="Map source and scientific limitations">
+            <span class="rstep-only">RSTEP source citations and exact editions are retained in the layer inspector. No legal clearance or available grid capacity is established.</span>
+            <strong>CesiumJS 1.144 • bundled locally</strong>
+            <span>No Cesium ion account, token, imagery, terrain, geocoder, or request path is configured.</span>
+            <strong id="terrain-attribution-title">Local procedural reference grid</strong>
+            <span id="terrain-attribution-context">WA-region frame is authored context, not an authoritative boundary.</span>
+            <span id="terrain-attribution-detail">Terrain heights are deterministic visual test values, not measured elevation.</span>
+            <strong id="wa-map-attribution-title" hidden>WA / Tribal context • local exact-byte package</strong>
+            <span id="wa-map-attribution" hidden></span>
+          </div>
+        </section>
+
+        <aside class="panel inspector-panel" aria-labelledby="inspector-heading">
+          <section id="rstep-inspection" class="rstep-only" aria-label="RSTEP evidence and findings"></section>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Explainability</p>
+              <h2 id="inspector-heading">Results & candidates</h2>
+            </div>
+          </div>
+
+          <section id="dem-inspector" class="dem-section" aria-labelledby="dem-inspector-heading" hidden>
+            <h3 id="dem-inspector-heading">Native elevation inspection</h3>
+            <p>Zero-based native raster cell. Queries read the validated lossless native grid, independent of terrain display.</p>
+            <form id="dem-probe-form" class="dem-probe-form">
+              <label for="dem-probe-row">Row <input id="dem-probe-row" type="number" step="1" value="0" required /></label>
+              <label for="dem-probe-column">Column <input id="dem-probe-column" type="number" step="1" value="0" required /></label>
+              <button id="dem-probe-submit" type="submit">Inspect native cell</button>
+            </form>
+            <output id="dem-probe-result" aria-live="polite" data-pending="false">Select a cell to inspect.</output>
+          </section>
+
+          <section aria-labelledby="results-heading">
+            <div class="section-heading">
+              <h3 id="results-heading">Analysis results</h3>
+              <span id="analysis-summary" class="muted">Not run</span>
+            </div>
+            <div id="analysis-results" class="result-list">
+              <div class="empty-card" data-testid="analysis-empty">
+                <strong>No result yet</strong>
+                <p>Load inputs and run the scenario. Missing data remains unknown, never suitable.</p>
+              </div>
+            </div>
+            <div id="reason-inspector" class="reason-inspector" tabindex="-1">
+              <p class="eyebrow">Selected reason trace</p>
+              <strong id="reason-title">Nothing selected</strong>
+              <ol id="reason-list">
+                <li>Select a result to inspect every deterministic rule decision.</li>
+              </ol>
+            </div>
+            <div id="roundtrip-receipt" class="roundtrip-receipt" data-state="not-run">
+              <strong>GeoJSON round trip</strong>
+              <span id="roundtrip-receipt-text">Not verified — export and re-import a user-selected file.</span>
+            </div>
+          </section>
+
+          <section class="coverage-section" aria-labelledby="coverage-heading">
+            <div class="section-heading">
+              <h3 id="coverage-heading">29-Nation coverage</h3>
+              <span id="coverage-summary" class="muted">Not loaded</span>
+            </div>
+            <p class="coverage-scope">
+              Public federal reservation, off-reservation trust-land, and statistical-area
+              representations intersecting Washington, with whole features retained.
+            </p>
+            <div id="coverage-list" class="coverage-list" aria-live="polite">
+              <div class="empty-card">
+                <strong>No coverage matrix</strong>
+                <p>Open the validated local WA / Tribal package to inspect all 29 Nations.</p>
+              </div>
+            </div>
+            <div id="tribal-inspector" class="tribal-inspector" tabindex="-1">
+              <p class="eyebrow">Selected Nation</p>
+              <strong id="tribal-inspector-title">Nothing selected</strong>
+              <div id="tribal-inspector-details">
+                <p>Select a Nation to inspect each distinct component and its explicit status.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="candidate-section" aria-labelledby="candidates-heading">
+            <div class="section-heading">
+              <h3 id="candidates-heading">Candidate polygons</h3>
+              <span id="candidate-count" class="count-badge">0</span>
+            </div>
+            <div id="candidate-list" class="candidate-list">
+              <div class="empty-card" data-testid="candidates-empty">
+                <strong>No candidates</strong>
+                <p>Use real Cesium globe clicks to create one.</p>
+              </div>
+            </div>
+
+            <form id="candidate-editor" class="candidate-editor" hidden>
+              <label for="candidate-name">Candidate name</label>
+              <div class="inline-form">
+                <input id="candidate-name" name="candidate-name" type="text" maxlength="120" required />
+                <button id="rename-candidate" type="submit">Rename</button>
+              </div>
+              <fieldset>
+                <legend>Numeric vertices (EPSG:4326 longitude / latitude)</legend>
+                <div id="vertex-editor" class="vertex-editor"></div>
+              </fieldset>
+              <button id="apply-vertices" class="button-primary full-width" type="button">
+                Apply numeric vertex edits
+              </button>
+              <button id="delete-candidate" class="button-danger full-width" type="button">
+                Delete selected candidate
+              </button>
+            </form>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="status-bar">
+        <div id="workflow-status" role="status" aria-live="polite" data-state="empty">
+          <span class="status-dot"></span>
+          <span id="workflow-status-text">Empty — no synthetic layers loaded.</span>
+        </div>
+        <div class="build-facts">
+          <span>governance_enforced=false</span>
+          <span>public_distribution_allowed=false</span>
+          <span id="build-version"></span>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>
